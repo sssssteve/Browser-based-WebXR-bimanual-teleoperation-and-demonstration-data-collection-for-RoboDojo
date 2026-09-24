@@ -86,7 +86,7 @@ Pico 4 Ultra 实机 WebXR、按键映射和端到端延迟仍未验证；本次�
 这里复用服务器原有 CUDA/runtime 依赖目录；迁移到本地时使用本地已经跑通 RoboDojo 的环境，不需要复制整个 recovery 项目。
 
 ```bash
-cd /path/to/robodojo-vr-teleop-collector
+cd /path/to/robodojo-vr-collector
 export CUDA_PATH=/path/to/cuda/runtime
 export PYTHONPATH=/path/to/runtime/dependencies
 /path/to/isaac-sim/python.sh run.py \

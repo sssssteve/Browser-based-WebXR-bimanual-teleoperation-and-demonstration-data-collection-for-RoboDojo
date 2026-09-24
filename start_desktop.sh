@@ -10,6 +10,7 @@ SESSION=robodojo
 PORT=${ROBODOJO_PORT:-8443}
 ADB=${ROBODOJO_ADB:-$(command -v adb 2>/dev/null || true)}
 ADB_LOG=/tmp/robodojo_adb.log
+PROGRESS_FILE=${ROBODOJO_PROGRESS_FILE:-/dev/shm/robodojo_pico_progress.json}
 cd "$PROJECT"
 
 # Close an older launcher terminal left waiting for input, but never kill this copy.
@@ -118,6 +119,23 @@ echo "正在等待仿真就绪……"
 for _ in $(seq 1 180); do
   STATUS=$(curl -fsS --max-time 2 \
     "http://127.0.0.1:$PORT/status?token=$TOKEN" 2>/dev/null || true)
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    ERROR=$(python3 - "$PROGRESS_FILE" <<'PY' 2>/dev/null || true
+import json
+import pathlib
+import sys
+
+try:
+    state = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    print(state.get("error") or state.get("phase") or "服务进程已退出")
+except Exception:
+    print("服务进程已退出")
+PY
+)
+    echo "RoboDojo 启动失败：$ERROR" >&2
+    echo "请检查日志：$PROJECT/robodojo_current.log" >&2
+    exit 1
+  fi
   if [[ "$MONITOR_PAGE_OPENED" == false && -n "$STATUS" ]]; then
     if command -v xdg-open >/dev/null; then
       nohup xdg-open "$MONITOR_PAGE" >/tmp/robodojo_browser.log 2>&1 &
@@ -128,11 +146,35 @@ for _ in $(seq 1 180); do
     echo "已在 Piper 默认浏览器中打开数采页面。"
   fi
   if [[ "$VR_FORWARD" == true && "$VR_PAGE_OPENED" == false && -n "$STATUS" ]]; then
-    if timeout 8 "$ADB" -s "$VR_SERIAL" shell am start \
-      -a android.intent.action.VIEW -d "$VR_PAGE" >>"$ADB_LOG" 2>&1; then
-      echo "已请求在 VR 设备的默认浏览器中打开数采页面。"
+    VR_BROWSER_CONNECTED=false
+    for _ in 1 2; do
+      timeout 8 "$ADB" -s "$VR_SERIAL" reverse "tcp:$PORT" "tcp:$PORT" \
+        >>"$ADB_LOG" 2>&1 || true
+      if timeout 8 "$ADB" -s "$VR_SERIAL" shell pm path com.oculus.vrshell \
+        >/dev/null 2>&1; then
+        timeout 8 "$ADB" -s "$VR_SERIAL" shell am start \
+          -a android.intent.action.VIEW -n com.oculus.vrshell/.MainActivity \
+          -d systemux://browser -e uri "$VR_PAGE" >>"$ADB_LOG" 2>&1 || true
+      else
+        timeout 8 "$ADB" -s "$VR_SERIAL" shell am start \
+          -a android.intent.action.VIEW -d "$VR_PAGE" >>"$ADB_LOG" 2>&1 || true
+      fi
+      for _ in $(seq 1 20); do
+        CLIENT_COUNT=$(curl -fsS --max-time 2 \
+          "http://127.0.0.1:$PORT/status?token=$TOKEN" 2>/dev/null |
+          python3 -c 'import json,sys; print(json.load(sys.stdin).get("input", {}).get("client_count", 0))' \
+          2>/dev/null || printf '0')
+        if [[ "$CLIENT_COUNT" =~ ^[0-9]+$ && "$CLIENT_COUNT" -gt 0 ]]; then
+          VR_BROWSER_CONNECTED=true
+          break 2
+        fi
+        sleep 0.5
+      done
+    done
+    if [[ "$VR_BROWSER_CONNECTED" == true ]]; then
+      echo "已在 VR 设备前台打开数采页面，并确认控制页面已连接。"
     else
-      echo "VR 页面自动打开失败；请在头显浏览器手动打开：$VR_PAGE"
+      echo "VR 页面自动打开失败或未完成连接；请在头显中打开浏览器后重试。"
     fi
     VR_PAGE_OPENED=true
   fi

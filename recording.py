@@ -162,6 +162,7 @@ class Recorder:
             self.file.attrs["quality_reason"] = str(error)
         for name, value in report.get("timing", {}).items():
             self.file.attrs[f"timing_{name}"] = value
+        self.file.attrs["training_eligible"] = self.training_eligible and report.get("quality_pass", False)
         self.file.close()
         if report.get("quality_pass", False):
             target_directory = self.data_directory

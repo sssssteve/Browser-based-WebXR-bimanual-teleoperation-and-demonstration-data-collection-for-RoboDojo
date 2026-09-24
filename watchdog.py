@@ -111,7 +111,8 @@ def archive_diagnostic(progress_path, directory, reason, state):
 
 def supervise(command, progress_path, diagnostics_dir, *, initial_timeout=360,
               runtime_timeout=20, reset_timeout=90, shutdown_timeout=30,
-              terminate_grace=10, max_restarts=3, poll_interval=.25, task_file=None):
+              terminate_grace=10, max_restarts=3, poll_interval=.25, task_file=None,
+              device_file=None):
     failures = 0
     stop_signal = [None]
 
@@ -126,6 +127,9 @@ def supervise(command, progress_path, diagnostics_dir, *, initial_timeout=360,
         if task_file is not None:
             task = Path(task_file).read_text().strip()
             child_command = [task if item == "__TASK__" else item for item in child_command]
+        if device_file is not None:
+            device = Path(device_file).read_text().strip()
+            child_command = [device if item == "__DEVICE__" else item for item in child_command]
         process = subprocess.Popen(child_command, start_new_session=True)
         launched = time.monotonic()
         timed_out = False
@@ -157,10 +161,11 @@ def supervise(command, progress_path, diagnostics_dir, *, initial_timeout=360,
         status = process.poll()
         state = read_progress(progress_path) or state or {}
         intentional = bool(state.get("restart_requested"))
+        collector_failed = state.get("error") == "collector_exception"
         print(f"[watchdog] child pid={process.pid} exit={status} intentional={intentional}", flush=True)
         if intentional and not timed_out:
             continue
-        if status == 0 and not timed_out:
+        if status == 0 and not timed_out and not collector_failed:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
             return 0
@@ -184,6 +189,7 @@ def main(argv=None):
     parser.add_argument("--terminate-grace", type=float, default=10)
     parser.add_argument("--max-restarts", type=int, default=3)
     parser.add_argument("--task-file")
+    parser.add_argument("--device-file")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -195,7 +201,8 @@ def main(argv=None):
                      reset_timeout=args.reset_timeout,
                      shutdown_timeout=args.shutdown_timeout,
                      terminate_grace=args.terminate_grace,
-                     max_restarts=args.max_restarts, task_file=args.task_file)
+                     max_restarts=args.max_restarts, task_file=args.task_file,
+                     device_file=args.device_file)
 
 
 if __name__ == "__main__":

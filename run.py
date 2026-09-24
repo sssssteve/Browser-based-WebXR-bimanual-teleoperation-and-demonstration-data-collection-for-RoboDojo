@@ -30,6 +30,20 @@ def available_tasks(root):
     return sorted(layouts & configs & modules)
 
 
+def task_requires_fluid(root, task):
+    for layout_path in task_layouts(root, task).values():
+        try:
+            if json.loads(layout_path.read_text()).get("Fluid"):
+                return True
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return False
+
+
+def task_runtime_device(root, task):
+    return "cpu" if task_requires_fluid(root, task) else "cuda:0"
+
+
 def task_layouts(root, task):
     paths = (Path(root) / "Assets/Eval_Layout/RoboDojo/arx_x5/0").glob(f"{task}_*.json")
     result = {}
@@ -234,6 +248,8 @@ def main():
     parser.add_argument("--scale", type=float, default=1.)
     parser.add_argument("--token-file", type=Path, help="Persist the browser token across task restarts")
     parser.add_argument("--task-state-file", type=Path, help="Write selected task and exit 75 for a supervisor restart")
+    parser.add_argument("--device-state-file", type=Path,
+                        help="Persist cpu/cuda device selection across supervised task restarts")
     parser.add_argument("--scene-state-file", type=Path,
                         help="Persist the random-scene toggle and selected official layout seed")
     parser.add_argument("--smoke-steps", type=int, default=0,
@@ -279,6 +295,16 @@ def main():
         parser.error(f"Missing Chinese prompts for official tasks: {', '.join(missing_prompts)}")
     if args.task not in tasks:
         parser.error(f"Task is not in the official ARX-X5 catalog: {args.task}")
+    required_device = task_runtime_device(root, args.task)
+    if str(args.device) != required_device:
+        if args.device_state_file is None:
+            parser.error(f"Task {args.task} requires --device {required_device}")
+        args.device_state_file.parent.mkdir(parents=True, exist_ok=True)
+        args.device_state_file.write_text(required_device + "\n")
+        if args.task_state_file is not None:
+            args.task_state_file.parent.mkdir(parents=True, exist_ok=True)
+            args.task_state_file.write_text(args.task + "\n")
+        return TASK_SWITCH_EXIT
     if args.replay:
         args.replay = args.replay.resolve()
     scene_state = load_scene_state(args.scene_state_file, args.seed)
@@ -406,7 +432,7 @@ def main():
         previous_tick_start = None
         while app.is_running():
             tick_start = time.monotonic()
-            layout_reload = None
+            runtime_reload = None
             period_ms = None if previous_tick_start is None else (tick_start - previous_tick_start) * 1000
             previous_tick_start = tick_start
             packet, commands, input_status = bridge.snapshot()
@@ -507,25 +533,46 @@ def main():
                     elif value not in tasks:
                         message = f"未知任务：{value}"
                         bridge.update_operation(operation_id, "failed", "validation", message)
-                    elif args.task_state_file is None:
+                    elif args.task_state_file is None or args.device_state_file is None:
                         message = "当前启动方式未启用任务切换。"
                         bridge.update_operation(operation_id, "failed", "validation", message)
                     elif value == args.task:
                         message = f"已经是当前任务：{value}"
                         bridge.update_operation(operation_id, "complete", "already_current")
                     else:
-                        if scene_state["enabled"] and args.scene_state_file is not None:
-                            scene_state["seed"] = next_scene_seed(root, value, scene_state["seed"])
-                            save_scene_state(args.scene_state_file, scene_state)
-                        args.task_state_file.parent.mkdir(parents=True, exist_ok=True)
-                        args.task_state_file.write_text(value + "\n")
-                        restart_task = value
-                        message = f"正在受控重启并切换任务：{value}"
                         controller.stop("lifecycle_restart", paused=True)
+                        target_seed = (next_scene_seed(root, value, scene_state["seed"])
+                                       if scene_state["enabled"] else 0)
+                        target_layout, target_seed, target_count = select_task_layout(
+                            root, value, None,
+                            {"enabled": scene_state["enabled"], "seed": target_seed})
+                        target_device = task_runtime_device(root, value)
+                        if target_device != str(args.device):
+                            scene_state.update(seed=target_seed)
+                            save_scene_state(args.scene_state_file, scene_state)
+                            args.task_state_file.parent.mkdir(parents=True, exist_ok=True)
+                            args.task_state_file.write_text(value + "\n")
+                            args.device_state_file.parent.mkdir(parents=True, exist_ok=True)
+                            args.device_state_file.write_text(target_device + "\n")
+                            restart_task = value
+                            message = (f"任务 {value} 需要 {target_device} 物理，"
+                                       "正在受控重启 Isaac。")
+                            operation = {"operation_id": operation_id, "name": name,
+                                         "status": "running", "phase": "device_restart",
+                                         "target_task": value, "target_device": target_device,
+                                         "target_seed": target_seed}
+                            progress.update("restart_requested", sim_tick=backend.ticks,
+                                            restart_requested=True, operation=operation,
+                                            task=value, target_device=target_device)
+                            break
+                        message = f"正在当前 Isaac 进程内切换任务：{value}"
                         operation = {"operation_id": operation_id, "name": name, "status": "running",
-                                     "phase": "restart_requested", "target_task": value}
-                        progress.update("restart_requested", sim_tick=backend.ticks,
-                                        restart_requested=True, operation=operation, task=value)
+                                     "phase": "task_reload", "target_task": value,
+                                     "target_seed": target_seed}
+                        progress.update("reset_task_requested", sim_tick=backend.ticks,
+                                        operation=operation, task=value)
+                        runtime_reload = (value, target_layout, target_seed, target_count,
+                                          scene_state["enabled"], operation, "task")
                         break
                 elif name == "reset":
                     if recorder is not None:
@@ -564,7 +611,8 @@ def main():
                                      "target_seed": target_seed}
                         progress.update("reset_layout_requested", sim_tick=backend.ticks,
                                         operation=operation)
-                        layout_reload = (target_layout, target_seed, target_count, True, operation)
+                        runtime_reload = (args.task, target_layout, target_seed, target_count,
+                                          True, operation, "layout")
                         break
                 elif name == "set_random_scene":
                     if recorder is not None:
@@ -587,7 +635,8 @@ def main():
                                      "target_seed": target_seed}
                         progress.update("reset_layout_requested", sim_tick=backend.ticks,
                                         operation=operation)
-                        layout_reload = (target_layout, target_seed, target_count, value, operation)
+                        runtime_reload = (args.task, target_layout, target_seed, target_count,
+                                          value, operation, "layout")
                         break
                 elif name == "home":
                     controller.stop("arm_homing", paused=True)
@@ -604,43 +653,52 @@ def main():
                     teleop_allowed=False, release_required=True,
                     hold_reason="lifecycle_restart"))
                 break
-            if layout_reload is not None:
-                target_layout, target_seed, target_count, target_enabled, operation = layout_reload
+            if runtime_reload is not None:
+                (target_task, target_layout, target_seed, target_count,
+                 target_enabled, operation, reload_kind) = runtime_reload
                 bridge.publish_status(dict(
-                    bridge.status, phase="resetting", task=args.task,
+                    bridge.status, phase="resetting", task=target_task,
                     message=message, input_fresh=False, env_epoch=env_epoch,
                     teleop_allowed=False, release_required=True,
-                    hold_reason="layout_reload", operation=operation))
+                    hold_reason=f"{reload_kind}_reload", operation=operation))
                 try:
-                    progress.update("reset_layout_close_enter", sim_tick=backend.ticks,
+                    progress.update(f"reset_{reload_kind}_close_enter", sim_tick=backend.ticks,
                                     operation=operation)
                     backend.close()
                     backend = None
-                    progress.update("reset_layout_rebuild_enter", sim_tick=0, operation=operation,
+                    progress.update(f"reset_{reload_kind}_rebuild_enter", sim_tick=0,
+                                    operation=operation,
                                     target_seed=target_seed)
                     (backend, controller, observation, metadata, task_info, episodes,
-                     last_command) = create_runtime(args.task, target_layout, target_seed)
+                     last_command) = create_runtime(target_task, target_layout, target_seed)
                 except BaseException:
-                    log.exception("In-process layout reload failed; requesting supervisor restart")
+                    log.exception("In-process %s reload failed; requesting supervisor restart",
+                                  reload_kind)
                     scene_state.update(enabled=target_enabled, seed=target_seed)
                     save_scene_state(args.scene_state_file, scene_state)
-                    restart_task = args.task
+                    args.task_state_file.parent.mkdir(parents=True, exist_ok=True)
+                    args.task_state_file.write_text(target_task + "\n")
+                    restart_task = target_task
                     operation.update(phase="restart_fallback")
                     progress.update("restart_requested", sim_tick=0, restart_requested=True,
-                                    operation=operation)
+                                    operation=operation, task=target_task)
                     break
-                scene_state.update(enabled=target_enabled, seed=target_seed)
-                save_scene_state(args.scene_state_file, scene_state)
-                metadata["random_scene_enabled"] = target_enabled
-                args.seed = target_seed
+                args.task = target_task
                 layout = target_layout
                 layout_count = target_count
+                scene_state.update(enabled=target_enabled, seed=target_seed)
+                save_scene_state(args.scene_state_file, scene_state)
+                args.task_state_file.parent.mkdir(parents=True, exist_ok=True)
+                args.task_state_file.write_text(target_task + "\n")
+                metadata["random_scene_enabled"] = target_enabled
+                args.seed = target_seed
                 counts_by_task = episode_counts(args.output)
                 bridge.update_operation(operation["operation_id"], "complete", "ready")
                 operation.update(status="complete", phase="ready")
                 progress.update("ready", sim_tick=backend.ticks, operation=operation,
                                 restart_requested=False, target_seed=target_seed)
-                message = (f"已在当前 Isaac 进程内切换到布局 {target_layout.name}；"
+                noun = "任务" if reload_kind == "task" else "布局"
+                message = (f"已在当前 Isaac 进程内切换到{noun} {target_task} / {target_layout.name}；"
                            "请松开双手侧握键后重新接管。")
                 frames = 0
                 started = time.monotonic()
@@ -845,4 +903,8 @@ def replay(backend, path, output):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        exit_code = main()
+    except Exception:
+        exit_code = 1
+    raise SystemExit(exit_code)

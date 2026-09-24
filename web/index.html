@@ -5,7 +5,7 @@
 <link rel="icon" href="data:,">
 <style>
 body{font:17px system-ui;background:#101b26;color:#ecf3fa;margin:32px auto;max-width:980px;padding:0 22px}
-h1{font-size:28px}button,select{font:inherit;padding:12px 20px;border:0;border-radius:8px;margin:6px;background:#2b455d;color:white}button{cursor:pointer}
+h1{font-size:28px}button,select,.button-link{font:inherit;padding:12px 20px;border:0;border-radius:8px;margin:6px;background:#2b455d;color:white}.button-link{display:inline-block;text-decoration:none}button{cursor:pointer}
 #enter{background:#247d66}#debug{background:#7558a6}#debug.active{background:#b35c78}button:disabled{background:#40505d!important;color:#8d9aa5;cursor:not-allowed}#status{white-space:pre-wrap;line-height:1.6;color:#a9dacc}
 #preview{width:100%;max-width:800px;background:#080e15;border-radius:10px}small{color:#aebdca}#xr{display:none}
 .panel{background:#172635;border-radius:10px;padding:12px;margin:14px 0}select{max-width:520px}
@@ -19,6 +19,7 @@ h1{font-size:28px}button,select{font:inherit;padding:12px 20px;border:0;border-r
 <p>按下任一摇杆：打开或关闭 VR 菜单。菜单内用摇杆上下选择、扳机确认、右 B 返回；任务切换、官方布局轮换、错误恢复、删除轨迹和退出页面都在菜单内。</p></div>
 <button id="enter" disabled>进入 VR</button>
 <button id="debug">桌面调试模式</button>
+<a id="spectator-link" class="button-link" href="/spectator" target="_blank" rel="noopener">打开 PC 监看页面</a>
 <div id="debug-help" class="panel" hidden><b>桌面模拟 VR 输入（不代表 Meta Quest / WebXR 已验证）</b>
 <p>1 / 2 选择左手或右手；W/S 前后，A/D 左右，R/F 上下；I/K 俯仰，J/L 偏航，U/O 翻滚。</p>
 <p>必须同时按住空格和移动键才能驱动所选机械臂；按住 Shift 模拟扳机并控制夹爪。切换窗口会释放按键并暂停，返回后可继续。</p>
@@ -37,7 +38,7 @@ h1{font-size:28px}button,select{font:inherit;padding:12px 20px;border:0;border-r
 <select id="episode"><option value="">暂无失败轨迹</option></select>
 <button id="review">播放错误视频</button><button id="takeover">从末状态接手</button>
 <button id="delete-selected">删除所选轨迹</button></div>
-<button id="exit">退出并关闭页面</button>
+<button id="exit">退出 VR（保留网页）</button>
 <p id="status">连接中…</p><canvas id="preview" width="1280" height="720"></canvas><canvas id="xr"></canvas>
 <p><small>头显显示仿真相机的虚拟屏幕。保存时由 RoboDojo 任务判据标注成功与否。正在录制时重置会被拒绝，请先保存或丢弃。</small></p>
 <script type="module" src="/client.js"></script>

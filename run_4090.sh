@@ -32,12 +32,14 @@ if [[ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]]; then
 fi
 
 TASK_FILE="$PROJECT/current_task.txt"
+DEVICE_FILE="$PROJECT/current_device.txt"
 TOKEN_FILE="$PROJECT/web_token.txt"
 SCENE_FILE="$PROJECT/scene_state.json"
 PROGRESS_FILE=${ROBODOJO_PROGRESS_FILE:-/dev/shm/robodojo_pico_progress.json}
 EPOCH_FILE="$PROJECT/env_epoch.txt"
 DIAGNOSTICS="$PROJECT/validation/watchdog"
 [[ -s "$TASK_FILE" ]] || printf '%s\n' stack_blocks >"$TASK_FILE"
+[[ -s "$DEVICE_FILE" ]] || printf '%s\n' "$ROBODOJO_DEVICE" >"$DEVICE_FILE"
 
 input_only=false
 for arg in "$@"; do
@@ -55,11 +57,12 @@ if [[ "$input_only" == true ]]; then
 else
   child=("$PROJECT/launch.sh"
          --robodojo-root "$ROBODOJO_ROOT"
-         --task __TASK__ --headless --device "$ROBODOJO_DEVICE"
+         --task __TASK__ --headless --device __DEVICE__
          --host 0.0.0.0 --port "$ROBODOJO_PORT" --allow-http-lan
          --scale 1.0 --output "$ROBODOJO_OUTPUT"
          --max-wall-gap 0.2
          --token-file "$TOKEN_FILE" --task-state-file "$TASK_FILE"
+         --device-state-file "$DEVICE_FILE"
          --scene-state-file "$SCENE_FILE" --progress-file "$PROGRESS_FILE"
          --epoch-file "$EPOCH_FILE" "$@")
 fi
@@ -71,4 +74,5 @@ exec python "$PROJECT/watchdog.py" \
   --reset-timeout "${ROBODOJO_RESET_TIMEOUT:-90}" \
   --shutdown-timeout "${ROBODOJO_SHUTDOWN_TIMEOUT:-30}" \
   --terminate-grace "${ROBODOJO_TERMINATE_GRACE:-10}" \
-  --max-restarts "${ROBODOJO_MAX_RESTARTS:-3}" --task-file "$TASK_FILE" -- "${child[@]}"
+  --max-restarts "${ROBODOJO_MAX_RESTARTS:-3}" --task-file "$TASK_FILE" \
+  --device-file "$DEVICE_FILE" -- "${child[@]}"

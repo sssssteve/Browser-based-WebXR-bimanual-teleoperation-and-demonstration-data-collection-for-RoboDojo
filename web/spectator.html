@@ -2,14 +2,38 @@
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RoboDojo · 4090 监看</title><link rel="icon" href="data:,">
 <style>
-body{margin:0;background:#080e15;color:#ecf3fa;font:18px system-ui;overflow:hidden}
+*{box-sizing:border-box}body{margin:0;background:#080e15;color:#ecf3fa;font:17px system-ui;overflow:hidden}
 #stage{height:100vh;display:grid;grid-template-rows:auto auto 1fr;background:#101b26}
-#status{padding:12px 20px;color:#a9dacc;white-space:pre-wrap}.prompt{padding:12px 20px;background:#172635;border-left:6px solid #73e5b3;font-size:22px}
-#preview{min-height:0;width:100%;height:100%;object-fit:contain;background:#080e15}
+#summary{display:flex;gap:10px;padding:12px 190px 12px 18px;flex-wrap:wrap;background:#101b26}
+.metric{min-width:145px;padding:9px 13px;border-radius:8px;background:#1b3042}.metric b{display:block;color:#8fb4ca;font-size:13px}.metric span{font-size:20px;font-weight:700}
+.prompt{padding:10px 20px;background:#172635;border-left:6px solid #73e5b3;font-size:20px}
+#workspace{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,27vw);gap:12px;padding:12px}
+#viewport{position:relative;min-width:0;min-height:0;background:#080e15;border-radius:10px;overflow:hidden}
+#preview{width:100%;height:100%;object-fit:contain;background:#080e15}
+#menu{position:absolute;inset:6% 12%;padding:24px 28px;background:#040c14ee;border:1px solid #41647c;border-radius:14px;box-shadow:0 8px 36px #000b;overflow:auto}
+#menu[hidden]{display:none}#menu h2{margin:0 0 14px;color:#73e5b3;font-size:28px}#menu-body{color:#d7e3ec;white-space:pre-wrap;margin-bottom:12px}
+#menu-items{list-style:none;margin:0;padding:0;display:grid;gap:8px}#menu-items li{padding:10px 14px;border-radius:7px;background:#ffffff0f;font-size:20px}#menu-items li.selected{background:#247d66;color:white}#menu-help{margin:14px 0 0;color:#aebdca;font-size:14px}
+#details{min-height:0;overflow:auto;border-radius:10px;background:#172635;padding:16px}#details h2{margin:0 0 12px;font-size:20px;color:#73e5b3}
+#status{margin:0;color:#a9dacc;white-space:pre-wrap;line-height:1.55;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
 #recording{position:fixed;z-index:2;top:14px;right:20px;padding:10px 16px;border-radius:999px;background:#34495b;color:#fff;font-weight:700;box-shadow:0 2px 12px #0008}
 #recording[data-state="recording"]{background:#c62828;animation:pulse 1.2s infinite}#recording[data-state="error"]{background:#9a6700}
 @keyframes pulse{50%{box-shadow:0 0 0 8px #c6282844}}
+@media(max-width:900px){#workspace{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}#details{max-height:30vh}#summary{padding-right:18px}.metric{min-width:130px}#recording{top:auto;bottom:14px}}
 </style>
 <div id="recording" data-state="starting" aria-live="polite">○ 等待录制状态</div>
-<div id="stage"><div id="status">连接中…</div><div class="prompt" id="prompt">等待任务 Prompt…</div><canvas id="preview" width="1280" height="720"></canvas></div>
+<div id="stage">
+  <div id="summary">
+    <div class="metric"><b>运行状态</b><span id="phase">连接中</span></div>
+    <div class="metric"><b>当前任务已验收保存</b><span id="task-count">0 条</span></div>
+    <div class="metric"><b>全部任务已验收保存</b><span id="total-count">0 条</span></div>
+    <div class="metric"><b>本次录制</b><span id="frame-count">0 帧</span></div>
+  </div>
+  <div class="prompt" id="prompt">等待任务 Prompt…</div>
+  <div id="workspace">
+    <div id="viewport"><canvas id="preview" width="1280" height="720"></canvas>
+      <section id="menu" hidden aria-live="polite"><h2 id="menu-title"></h2><div id="menu-body"></div><ol id="menu-items"></ol><p id="menu-help">摇杆上下选择 · 扳机确认 · B 返回 · 按下摇杆关闭菜单</p></section>
+    </div>
+    <aside id="details"><h2>实时监测详情</h2><pre id="status">连接中…</pre></aside>
+  </div>
+</div>
 <script type="module" src="/spectator.js"></script></html>

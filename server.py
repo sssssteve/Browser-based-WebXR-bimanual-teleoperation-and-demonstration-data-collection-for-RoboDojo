@@ -68,6 +68,8 @@ class Bridge:
         self.last_operation = None
         self.operation_counter = 0
         self.progress_path = Path(progress_path) if progress_path else None
+        self.vr_ui = {"open": False}
+        self.vr_ui_session_id = None
 
     def snapshot(self):
         with self.lock:
@@ -125,6 +127,9 @@ class Bridge:
 
     def _activate_input_locked(self, ws):
         client = self.clients[ws]
+        if self.vr_ui_session_id not in (None, client["session_id"]):
+            self.vr_ui = {"open": False}
+            self.vr_ui_session_id = None
         self.owner = ws
         self.owner_source = client["source"]
         self.owner_session_id = client["session_id"]
@@ -160,9 +165,38 @@ class Bridge:
             self.received = now
             return True
 
+    def update_vr_ui(self, ws, state):
+        with self.lock:
+            client = self.clients.get(ws)
+            if client is None or client["source"] != "webxr":
+                return False
+            if self.owner not in (None, ws):
+                return False
+            is_open = state.get("open")
+            if not isinstance(is_open, bool):
+                raise ValueError("VR 菜单状态无效")
+            ui = {"open": is_open}
+            if is_open:
+                title, items, body, selected = (state.get("title"), state.get("items"),
+                                                state.get("body", []), state.get("selected"))
+                if (not isinstance(title, str) or len(title) > 120 or
+                        not isinstance(items, list) or not 1 <= len(items) <= 128 or
+                        not all(isinstance(item, str) and len(item) <= 240 for item in items) or
+                        not isinstance(body, list) or len(body) > 12 or
+                        not all(isinstance(line, str) and len(line) <= 500 for line in body) or
+                        not isinstance(selected, int) or not 0 <= selected < len(items)):
+                    raise ValueError("VR 菜单状态无效")
+                ui.update(title=title, items=list(items), body=list(body), selected=selected)
+            self.vr_ui = ui
+            self.vr_ui_session_id = client["session_id"]
+            return True
+
     def unregister_input(self, ws):
         with self.lock:
-            self.clients.pop(ws, None)
+            client = self.clients.pop(ws, None)
+            if client and self.vr_ui_session_id == client["session_id"]:
+                self.vr_ui = {"open": False}
+                self.vr_ui_session_id = None
             self.input_connected = bool(self.clients)
             if self.owner is not ws:
                 return
@@ -273,6 +307,8 @@ class Bridge:
             self.pending_operation = None
             self.last_operation = None
             self.status = {"phase": "starting", "frames": 0, "env_epoch": self.env_epoch}
+            self.vr_ui = {"open": False}
+            self.vr_ui_session_id = None
 
 
 def create_app(bridge, token, output=None):
@@ -296,6 +332,7 @@ def create_app(bridge, token, output=None):
             raise web.HTTPUnauthorized()
         with bridge.lock:
             current = dict(bridge.status)
+            current["vr_ui"] = deepcopy(bridge.vr_ui)
             current["preview_transport"] = {
                 "frame_seq": bridge.image_seq,
                 "age_ms": None if not bridge.image_published else
@@ -362,6 +399,8 @@ def create_app(bridge, token, output=None):
                         name, value = parse_command(obj)
                         response = bridge.submit_command(name, value)
                         await ws.send_json(response)
+                    elif obj.get("type") == "ui_state":
+                        bridge.update_vr_ui(ws, obj)
                     else:
                         packet = validate_packet(obj)
                         bridge.accept_packet(ws, packet)
@@ -389,6 +428,7 @@ def create_app(bridge, token, output=None):
             while not ws.closed:
                 with bridge.lock:
                     image, current, sequence = bridge.image, dict(bridge.status), bridge.image_seq
+                    current["vr_ui"] = deepcopy(bridge.vr_ui)
                     current["preview_transport"] = {
                         "frame_seq": sequence,
                         "age_ms": None if not bridge.image_published else

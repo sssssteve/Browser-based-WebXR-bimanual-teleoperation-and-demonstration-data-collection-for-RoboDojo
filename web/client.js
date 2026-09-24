@@ -5,6 +5,7 @@ const statusElement = document.querySelector('#status');
 const preview = document.querySelector('#preview');
 const previewContext = preview.getContext('2d');
 const base = direct ? `ws://${direct}` : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
+document.querySelector('#spectator-link').href = `/spectator#${new URLSearchParams({token})}`;
 let input, video, session, reference, gl, program, texture, sequence = 0;
 let lastPoseSent = 0, latestStatus = {}, lastVideoTime = 0, previousButtons = {};
 let inputReconnectTimer, videoReconnectTimer, wasVisible = true, screenOrigin = [0, 1.4, -1.5];
@@ -16,6 +17,7 @@ let videoFrameNumber = 0, videoDrawnFrame = 0, lastVideoMessage = 0;
 let pendingVideoFrame = null, videoDecodeRunning = false, lastStatusUiUpdate = 0;
 let panelDirty = true, panelWarning = '';
 let lastEnvEpoch = null, poseDroppedBuffered = 0;
+let menuSyncSupported = false;
 let debugMode = false, debugAnimation = 0, debugLastTime = 0, debugSelected = 'left';
 let pendingDebugStart = false;
 const debugKeys = new Set();
@@ -66,6 +68,15 @@ document.querySelectorAll('[data-command]').forEach(button => {
 });
 function sendNeutral() {
   command('pause');
+}
+function publishMenuState() {
+  if (!menuSyncSupported || input?.readyState !== WebSocket.OPEN) return;
+  if (!menu) {
+    input.send(JSON.stringify({type: 'ui_state', open: false}));
+    return;
+  }
+  input.send(JSON.stringify({type: 'ui_state', open: true, title: menu.title,
+    items: menu.items.map(entry => entry.label), body: menu.body || [], selected: menuIndex}));
 }
 function scheduleInputReconnect() {
   if (inputReconnectTimer) return;
@@ -122,6 +133,7 @@ function connectInput(takeover=false) {
       input.send(JSON.stringify(pendingScene));
       pendingScene = null;
     }
+    publishMenuState();
     fetchTaskCatalog();
     const available = window.isSecureContext && navigator.xr && await navigator.xr.isSessionSupported('immersive-vr');
     document.querySelector('#enter').disabled = !available;
@@ -169,6 +181,10 @@ function connectVideo() {
       latestStatus = msg;
       statusReceivedAt = performance.now();
       panelDirty = true;
+      if (!menuSyncSupported && Object.hasOwn(msg, 'vr_ui')) {
+        menuSyncSupported = true;
+        publishMenuState();
+      }
       if (switchingTask && msg.task === switchingTask && msg.phase === 'ready') switchingTask = null;
       if (switchingScene === 'next' && msg.phase === 'ready' && msg.last_operation?.name === 'next_scene') switchingScene = null;
       else if (switchingScene !== null && msg.random_scene === switchingScene && msg.phase === 'ready') switchingScene = null;
@@ -298,6 +314,7 @@ function openMenu(title, items, push=true, body=[]) {
   menu = {title, items, body}; menuIndex = 0; axisReady = false;
   panelDirty = true;
   sendNeutral();
+  publishMenuState();
 }
 function backMenu() {
   if (review) { review = null; openMainMenu(false); return; }
@@ -305,8 +322,12 @@ function backMenu() {
   if (previous) { menu = previous.menu; menuIndex = previous.menuIndex; }
   else menu = null;
   panelDirty = true;
+  publishMenuState();
 }
-function closeMenu() { menu = null; menuStack = []; axisReady = false; panelDirty = true; }
+function closeMenu() {
+  menu = null; menuStack = []; axisReady = false; panelDirty = true;
+  publishMenuState();
+}
 function confirmMenu() {
   const selected = menu?.items[menuIndex];
   if (selected && !selected.disabled) selected.run();
@@ -381,7 +402,7 @@ function openMainMenu(push=true) {
     }),
     item('快速重置当前场景', () => { command('reset'); closeMenu(); }),
     item('更换下一份官方布局', () => { command('next_scene'); closeMenu(); }, !latestStatus.random_scene),
-    item('退出并关闭页面', () => openMenu('确认退出？', [item('确认退出', exitPage), item('取消', backMenu)])),
+    item('退出 VR（保留网页）', () => openMenu('确认退出 VR？', [item('确认退出 VR', exitPage), item('取消', backMenu)])),
   ], push);
 }
 
@@ -413,9 +434,7 @@ async function playEpisode(episode) {
 async function exitPage() {
   sendNeutral(); closeMenu();
   if (session) await session.end();
-  try { input?.close(); video?.close(); } catch {}
-  window.close();
-  setTimeout(() => location.replace('about:blank'), 100);
+  show('已退出 VR；网页和连接会保持打开，可随时再次进入 VR。');
 }
 
 function shader(type, source) {
@@ -664,7 +683,7 @@ function menuInput(sources) {
   if (Math.abs(axis) < .35) axisReady=true;
   if (axisReady && Math.abs(axis) > .65) {
     menuIndex = (menuIndex + (axis > 0 ? 1 : -1) + menu.items.length) % menu.items.length;
-    axisReady=false; panelDirty=true;
+    axisReady=false; panelDirty=true; publishMenuState();
   }
   if (back) backMenu(); else if (confirm) confirmMenu();
   return true;

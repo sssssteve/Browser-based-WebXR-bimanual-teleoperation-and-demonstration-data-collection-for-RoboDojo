@@ -16,13 +16,15 @@ from scipy.spatial.transform import Rotation
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from control import Clutch, Controller, validate_packet
+from export_official_hdf5 import export_episode
 from preview import PreviewEncoder
 from recording import (AsyncRecorder, CAMERAS, Recorder, RecorderBackpressure,
                        delete_episode, episode_counts, inspect_episode, list_episodes,
                        read_snapshot)
 from robodojo import RoboDojo
 from server import Bridge, create_app, parse_command
-from run import load_scene_state, preview_mosaic, select_task_layout, task_catalog, task_identity
+from run import (load_scene_state, preview_mosaic, select_task_layout, task_catalog,
+                 task_identity, task_runtime_device)
 from prompts_zh import PROMPTS_ZH, chinese_prompt
 from watchdog import ProgressFile, read_progress, supervise
 
@@ -134,6 +136,15 @@ def test_random_scene_state_selects_an_official_seeded_layout(tmp_path):
     assert fixed.name == "example_0.json" and seed == 0
 
 
+def test_fluid_tasks_select_cpu_and_solid_tasks_select_cuda(tmp_path):
+    layouts = tmp_path / "Assets/Eval_Layout/RoboDojo/arx_x5/0"
+    layouts.mkdir(parents=True)
+    (layouts / "solid_0.json").write_text('{"Rigid": {}}')
+    (layouts / "liquid_0.json").write_text('{"Fluid": {"wine": [{}]}}')
+    assert task_runtime_device(tmp_path, "solid") == "cuda:0"
+    assert task_runtime_device(tmp_path, "liquid") == "cpu"
+
+
 def test_random_task_variant_keeps_its_own_identity_and_data_directory(tmp_path):
     assert task_identity("stack_bowls") == {
         "task_family": "stack_bowls", "task_variant": "standard"}
@@ -195,8 +206,40 @@ def test_official_layout_and_wall_gap_quality_gate(tmp_path):
     assert bad_path.relative_to(tmp_path).parts[:2] == ("rejected", "stack_blocks")
     with h5py.File(bad_path) as file:
         assert not file.attrs["quality_pass"]
+        assert not file.attrs["training_eligible"]
         assert file.attrs["timing_wall_gap_count"] == 1
     assert [item["name"] for item in list_episodes(tmp_path, task="stack_blocks")] == [good_path.name]
+
+
+def test_export_official_hdf5_uses_command_and_omits_extra_fields(tmp_path):
+    names = ("left_arm_joint_states", "left_ee_joint_states",
+             "right_arm_joint_states", "right_ee_joint_states")
+    command = {name: np.full_like(observation(0)["state"][name], 9.) for name in names}
+    rec = Recorder(tmp_path, {"task": "stack_blocks"}, observation(0))
+    rec.append(observation(0), observation(1), command, packet(), 0., 100.)
+    rec.append(observation(1), observation(2), command, packet(seq=1), .04, 100.04)
+    source = rec.finish(True, "operator_save")
+    destination = tmp_path / "official.hdf5"
+    export_episode(source, destination)
+    with h5py.File(destination) as file:
+        assert set(file) == {"data_format_version", "instruction", "additional_info",
+                             "state", "action", "vision"}
+        assert set(file["action"]) == set(names)
+        assert len(file["state/left_arm_joint_states"]) == 2
+        assert len(file["vision/cam_head/colors"]) == 2
+        assert np.all(file["action/left_arm_joint_states"][:] == 9.)
+
+
+def test_export_official_hdf5_rejects_failed_demonstration(tmp_path):
+    names = ("left_arm_joint_states", "left_ee_joint_states",
+             "right_arm_joint_states", "right_ee_joint_states")
+    command = {name: np.ones_like(observation(0)["state"][name]) for name in names}
+    rec = Recorder(tmp_path, {"task": "stack_blocks"}, observation(0))
+    rec.append(observation(0), observation(1), command, packet(), 0., 100.)
+    rec.append(observation(1), observation(2), command, packet(seq=1), .04, 100.04)
+    source = rec.finish(False, "operator_save")
+    with pytest.raises(ValueError, match="positive demonstration"):
+        export_episode(source, tmp_path / "not_exported.hdf5")
 
 
 def test_debug_episode_is_kept_out_of_training_directory(tmp_path):
@@ -285,19 +328,25 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
                     page = await response.text()
                     assert response.status == 200 and 'Pico' in page
                     assert 'id="debug"' in page and '桌面模拟 VR 输入' in page
+                    assert 'id="spectator-link"' in page and '打开 PC 监看页面' in page
                 async with client.get(base + '/client.js') as response:
                     assert response.status == 200 and 'javascript' in response.content_type
                     client_js = await response.text()
                     assert 'function connect()' in client_js
                     assert 'function desktopDebugFrame(time)' in client_js
+                    assert 'if (!menuSyncSupported' in client_js
+                    assert '/spectator#${' in client_js
+                    assert 'window.close()' not in client_js and "location.replace('about:blank')" not in client_js
                     assert "window.addEventListener('blur', releaseDesktopDebugControls)" in client_js
                 async with client.get(base + '/spectator') as response:
                     spectator_page = await response.text()
                     assert response.status == 200 and '4090' in spectator_page
                     assert 'id="recording"' in spectator_page
+                    assert 'id="menu"' in spectator_page and '当前任务已验收保存' in spectator_page
                 async with client.get(base + '/spectator.js') as response:
                     assert response.status == 200 and 'javascript' in response.content_type
-                    assert '正在录制' in await response.text()
+                    spectator_js = await response.text()
+                    assert '正在录制' in spectator_js and 'renderVrMenu(msg.vr_ui)' in spectator_js
                 async with client.ws_connect(base + '/input?token=test-token') as ws:
                     observer = await client.ws_connect(base + '/input?token=test-token')
                     assert len(bridge.clients) == 2 and bridge.owner is None
@@ -310,9 +359,31 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
                     await asyncio.sleep(.03)
                     assert bridge.snapshot()[0]['seq'] == 2
                     assert bridge.snapshot()[0] is None  # latest pose is consumed once
+                    await ws.send_json({"type": "ui_state", "open": True,
+                                        "title": "RoboDojo 数采菜单",
+                                        "items": ["开始普通录制", "保存当前录制"],
+                                        "body": [], "selected": 1})
+                    await asyncio.sleep(.03)
+                    async with client.get(base + '/status?token=test-token') as response:
+                        ui = (await response.json())["vr_ui"]
+                        assert ui["open"] and ui["selected"] == 1
+                    task_items = [f"task-{index}" for index in range(55)]
+                    await ws.send_json({"type": "ui_state", "open": True,
+                                        "title": "选择 RoboDojo 任务",
+                                        "items": task_items, "body": [], "selected": 54})
+                    await asyncio.sleep(.03)
+                    async with client.get(base + '/status?token=test-token') as response:
+                        ui = (await response.json())["vr_ui"]
+                        assert ui["items"] == task_items and ui["selected"] == 54
                     await observer.send_json(packet(seq=99))
                     await asyncio.sleep(.03)
                     assert bridge.snapshot()[0] is None  # passive pages cannot override a fresh owner
+                    await observer.send_json({"type": "ui_state", "open": True,
+                                              "title": "旧页面菜单", "items": ["旧选项"],
+                                              "body": [], "selected": 0})
+                    await asyncio.sleep(.03)
+                    async with client.get(base + '/status?token=test-token') as response:
+                        assert (await response.json())["vr_ui"]["title"] == "选择 RoboDojo 任务"
                     await ws.send_json({"type": "command", "command": "select_task", "value": "stack_blocks"})
                     accepted = json.loads((await ws.receive()).data)
                     assert accepted["accepted"] and accepted["command"] == "select_task"
@@ -347,7 +418,9 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
                     assert pose is None and diagnostics["timed_out"]
                     bridge.publish(b'jpeg-test', {'phase':'ready'})
                     async with client.ws_connect(base + '/video?token=test-token') as video:
-                        assert json.loads((await video.receive()).data)['phase'] == 'ready'
+                        video_status = json.loads((await video.receive()).data)
+                        assert video_status['phase'] == 'ready'
+                        assert video_status['vr_ui']['title'] == '选择 RoboDojo 任务'
                         assert (await video.receive()).data == b'jpeg-test'
                         # A hung simulator must not masquerade as fresh video.
                         with pytest.raises(asyncio.TimeoutError):
@@ -371,11 +444,12 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
 
 
 def test_portable_launcher_opens_authorized_quest_page():
-    launcher = (Path(__file__).parents[2] / "bin/start.sh").read_text()
-    assert 'source "$(dirname "$0")/common.sh"' in launcher
-    assert '"$ADB_BIN"' in launcher
+    launcher = (Path(__file__).parents[1] / "start_desktop.sh").read_text()
+    assert 'source "$PROJECT/config.env"' in launcher
+    assert "ROBODOJO_ADB" in launcher and '"$ADB"' in launcher
     assert 'reverse "tcp:$PORT" "tcp:$PORT"' in launcher
-    assert "com.oculus.browser" in launcher
+    assert "com.oculus.vrshell" in launcher
+    assert 'MONITOR_PAGE="http://127.0.0.1:$PORT/spectator#token=$TOKEN"' in launcher
 
 
 def test_desktop_debug_can_take_over_input_owner():
@@ -606,3 +680,43 @@ def test_watchdog_allows_normal_initialization_before_runtime_timeout(tmp_path):
                        shutdown_timeout=.1, terminate_grace=.05, max_restarts=0,
                        poll_interval=.01)
     assert status == 0
+
+
+def test_watchdog_treats_collector_exception_as_failure_even_with_zero_exit(tmp_path):
+    command = _watchdog_child(tmp_path, """
+        import json, os, pathlib, sys, time
+        path=pathlib.Path(sys.argv[1])
+        path.write_text(json.dumps({'pid':os.getpid(),'phase':'shutdown_app_enter',
+                                    'error':'collector_exception',
+                                    'updated_monotonic':time.monotonic()}))
+    """)
+    status = supervise(command, tmp_path / "progress.json", tmp_path / "diagnostics",
+                       initial_timeout=.5, runtime_timeout=.1, reset_timeout=.1,
+                       shutdown_timeout=.1, terminate_grace=.05, max_restarts=0,
+                       poll_interval=.01)
+    assert status != 0
+
+
+def test_watchdog_substitutes_task_and_device_state(tmp_path):
+    script = tmp_path / "child.py"
+    output = tmp_path / "resolved.txt"
+    progress = tmp_path / "progress.json"
+    task_file = tmp_path / "task.txt"
+    device_file = tmp_path / "device.txt"
+    task_file.write_text("pour_liquid_into_cup\n")
+    device_file.write_text("cpu\n")
+    script.write_text(textwrap.dedent("""
+        import json, os, pathlib, sys, time
+        task, device, progress, output = sys.argv[1:]
+        pathlib.Path(output).write_text(f"{task}|{device}")
+        pathlib.Path(progress).write_text(json.dumps({
+            'pid': os.getpid(), 'phase': 'ready',
+            'updated_monotonic': time.monotonic()}))
+    """))
+    status = supervise(
+        [sys.executable, str(script), "__TASK__", "__DEVICE__", str(progress), str(output)],
+        progress, tmp_path / "diagnostics", max_restarts=0,
+        task_file=task_file, device_file=device_file,
+    )
+    assert status == 0
+    assert output.read_text() == "pour_liquid_into_cup|cpu"

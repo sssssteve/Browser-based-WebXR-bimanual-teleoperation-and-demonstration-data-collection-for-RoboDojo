@@ -3,12 +3,38 @@ const base = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host
 const statusElement = document.querySelector('#status');
 const promptElement = document.querySelector('#prompt');
 const recordingElement = document.querySelector('#recording');
+const phaseElement = document.querySelector('#phase');
+const taskCountElement = document.querySelector('#task-count');
+const totalCountElement = document.querySelector('#total-count');
+const frameCountElement = document.querySelector('#frame-count');
+const menuElement = document.querySelector('#menu');
+const menuTitleElement = document.querySelector('#menu-title');
+const menuBodyElement = document.querySelector('#menu-body');
+const menuItemsElement = document.querySelector('#menu-items');
 const canvas = document.querySelector('#preview');
 const context = canvas.getContext('2d');
 let socket, reconnectTimer, statusReceivedAt = 0, transferMs = 0, decodeMs = 0;
 let frameNumber = 0, drawnFrame = 0, lastMessage = 0;
 let pendingFrame = null, decodeRunning = false;
 let envEpoch = null;
+
+function renderVrMenu(ui) {
+  if (!ui?.open) {
+    menuElement.hidden=true;
+    menuItemsElement.replaceChildren();
+    return;
+  }
+  menuElement.hidden=false;
+  menuTitleElement.textContent=ui.title || 'VR 菜单';
+  menuBodyElement.textContent=(ui.body || []).join('\n');
+  menuItemsElement.replaceChildren(...(ui.items || []).map((label,index) => {
+    const item=document.createElement('li');
+    item.textContent=`${index === ui.selected ? '› ' : ''}${label}`;
+    item.classList.toggle('selected',index === ui.selected);
+    return item;
+  }));
+  menuItemsElement.querySelector('.selected')?.scrollIntoView({block:'nearest'});
+}
 
 function connect() {
   if (!token) { statusElement.textContent='缺少连接凭证。'; return; }
@@ -30,6 +56,14 @@ function connect() {
       statusReceivedAt=performance.now();
       const phase={starting:'启动中',ready:'已就绪',recording:'录制中'}[msg.phase] || msg.phase;
       const input=msg.input || {}, cycle=msg.cycle_ms || {}, writer=msg.recording_writer || {};
+      const counts=msg.episode_counts || {};
+      const taskCount=Number(counts[msg.task] || 0);
+      const totalCount=Object.values(counts).reduce((sum,value) => sum + Number(value || 0),0);
+      phaseElement.textContent=phase || '未知';
+      taskCountElement.textContent=`${taskCount} 条`;
+      totalCountElement.textContent=`${totalCount} 条`;
+      frameCountElement.textContent=`${msg.frames || 0} 帧`;
+      renderVrMenu(msg.vr_ui);
       if (writer.writer_error) {
         recordingElement.dataset.state='error';
         recordingElement.textContent='● 录制写入异常';
@@ -42,6 +76,7 @@ function connect() {
       }
       const step=msg.step_profile || {}, obs=msg.observation_profile || {};
       statusElement.textContent=`${msg.task || ''} · ${phase} · epoch ${msg.env_epoch ?? '-'} · tick ${msg.sim_tick ?? '-'} · ${msg.wall_hz || 0} Hz\n`+
+        `录制 ${msg.phase === 'recording' ? '是' : '否'} · 当前 ${msg.frames || 0} 帧 · 当前任务已验收 ${taskCount} 条 · 全部任务已验收 ${totalCount} 条\n`+
         `输入 ${input.state || '未知'} · 收到/应用 ${input.received_seq ?? '-'}/${input.applied_seq ?? '-'} · 年龄 ${input.effective_age_ms ?? '-'} ms · tracking L/R ${input.left_tracking ? '有' : '无'}/${input.right_tracking ? '有' : '无'}\n`+
         `遥操 ${msg.teleop_allowed ? '允许' : '保持'} · 原因 ${msg.hold_reason || '-'} · IK ${JSON.stringify(msg.ik_status || {})}\n`+
         `周期 ms 当前/p50/p95/p99/max ${cycle.current ?? '-'}/${cycle.p50 ?? '-'}/${cycle.p95 ?? '-'}/${cycle.p99 ?? '-'}/${cycle.max ?? '-'}\n`+
@@ -58,6 +93,8 @@ function connect() {
     statusElement.textContent='画面连接已断开，正在重连…';
     recordingElement.dataset.state='error';
     recordingElement.textContent='● 监看连接已断开';
+    phaseElement.textContent='连接断开';
+    renderVrMenu(null);
     if (!reconnectTimer) reconnectTimer=setTimeout(() => { reconnectTimer=null; connect(); },1500);
   };
 }
