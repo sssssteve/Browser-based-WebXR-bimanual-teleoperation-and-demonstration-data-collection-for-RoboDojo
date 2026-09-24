@@ -1,0 +1,81 @@
+diff --git a/env/scene_manager/objects/articulation.py b/env/scene_manager/objects/articulation.py
+index aa4eafe..7552f92 100644
+--- a/env/scene_manager/objects/articulation.py
++++ b/env/scene_manager/objects/articulation.py
+@@ -232,8 +232,11 @@ class ArticulationObject(SingleArticulation):
+     def initialize(self):
+         self.physics_sim_view = SimulationManager.get_physics_sim_view()
+         super().initialize(physics_sim_view=self.physics_sim_view)
+-        self.upper_joint_positions = self.dof_properties["upper"].copy()
+-        self.lower_joint_positions = self.dof_properties["lower"].copy()
++        limits = self._articulation_view.get_dof_limits()[0]
++        if isinstance(limits, torch.Tensor):
++            limits = limits.detach().cpu().numpy()
++        self.lower_joint_positions = limits[:, 0].copy()
++        self.upper_joint_positions = limits[:, 1].copy()
+         self.initial_joint_positions = self.get_current_joint_positions()
+         self.app = omni.kit.app.get_app()
+         self.app.update()
+diff --git a/env/scene_manager/objects/garment.py b/env/scene_manager/objects/garment.py
+--- a/env/scene_manager/objects/garment.py
++++ b/env/scene_manager/objects/garment.py
+@@ -283,7 +283,10 @@ class GarmentObject(SingleClothPrim):
+         else:
+             mesh_points = self._cloth_prim_view.get_world_positions().squeeze(0).detach().cpu().numpy()
+             transformed_mesh_points = mesh_points
+-            pos_world = None
+-            ori_world = None
++            # GPU cloth vertices are already expressed in world coordinates.
++            # Keep the reward parser's pose contract valid without applying a
++            # second transform; cloth deformation has no single rigid pose.
++            pos_world = np.zeros(3, dtype=np.float32)
++            ori_world = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+ 
+         return transformed_mesh_points, mesh_points, pos_world, ori_world
+@@ -300,12 +303,14 @@ class GarmentObject(SingleClothPrim):
+         self.visual_material_prim = prims_utils.get_prim_at_path(self.visual_material_path)
+         # Check if visual_material_prim is valid and has children
+         if not self.visual_material_prim or not self.visual_material_prim.IsValid():
+             print(f"Warning: Could not get valid prim at {self.visual_material_path}")
+             return
+-        children = prims_utils.get_prim_children(self.visual_material_prim)
+-        if not children:
+-            print(f"Warning: Material prim at {self.visual_material_path} has no children.")
+-            return
+-
+-        self.material_prim = children[0]
++        if self.visual_material_prim.IsA(UsdShade.Material):
++            self.material_prim = self.visual_material_prim
++        else:
++            children = prims_utils.get_prim_children(self.visual_material_prim)
++            if not children:
++                print(f"Warning: Material prim at {self.visual_material_path} has no children.")
++                return
++            self.material_prim = children[0]
+         self.material_prim_path = self.material_prim.GetPath()
+diff --git a/env/scene_manager/scene_manager.py b/env/scene_manager/scene_manager.py
+index 91ac927..6678f74 100644
+--- a/env/scene_manager/scene_manager.py
++++ b/env/scene_manager/scene_manager.py
+@@ -181,6 +181,10 @@ class SceneManager:
+             self._set_env_seed(env_id)
+             self.reload_env_scene(env_id)
+ 
++        # Particle cloth views are created from the PhysX simulation view. Give
++        # PhysX one step to discover cloth prims added during reload_env_scene
++        # before GarmentObject.initialize() asks for that view.
++        self.sim.sim_step()
+         for obj in self.pending_initialization:
+             obj.initialize()
+         self.pending_initialization.clear()
+@@ -628,8 +628,9 @@ class SceneManager:
+ 
+         # Determine which object collections to clear based on exclude_types
+         all_collections = [
+-            (self._rigid_and_dynamic_objects[env_id], "rigid"),
++            # Relocate articulations while the physics tensor view is still valid.
+             (self._articulation_objects[env_id], "articulation"),
++            (self._rigid_and_dynamic_objects[env_id], "rigid"),
+             (self._garment_objects[env_id], "garment"),
+             (self._geometry_objects[env_id], "geometry"),
+             (self._fluid_objects[env_id], "fluid"),

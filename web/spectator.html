@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RoboDojo · 4090 监看</title><link rel="icon" href="data:,">
+<style>
+body{margin:0;background:#080e15;color:#ecf3fa;font:18px system-ui;overflow:hidden}
+#stage{height:100vh;display:grid;grid-template-rows:auto auto 1fr;background:#101b26}
+#status{padding:12px 20px;color:#a9dacc;white-space:pre-wrap}.prompt{padding:12px 20px;background:#172635;border-left:6px solid #73e5b3;font-size:22px}
+#preview{min-height:0;width:100%;height:100%;object-fit:contain;background:#080e15}
+#recording{position:fixed;z-index:2;top:14px;right:20px;padding:10px 16px;border-radius:999px;background:#34495b;color:#fff;font-weight:700;box-shadow:0 2px 12px #0008}
+#recording[data-state="recording"]{background:#c62828;animation:pulse 1.2s infinite}#recording[data-state="error"]{background:#9a6700}
+@keyframes pulse{50%{box-shadow:0 0 0 8px #c6282844}}
+</style>
+<div id="recording" data-state="starting" aria-live="polite">○ 等待录制状态</div>
+<div id="stage"><div id="status">连接中…</div><div class="prompt" id="prompt">等待任务 Prompt…</div><canvas id="preview" width="1280" height="720"></canvas></div>
+<script type="module" src="/spectator.js"></script></html>
