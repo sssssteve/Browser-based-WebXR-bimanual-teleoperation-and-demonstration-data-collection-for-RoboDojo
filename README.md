@@ -76,7 +76,7 @@ Export a complete, successful, quality-approved episode to the official RoboDojo
 python export_official_hdf5.py data/episode_xxx.hdf5 data/episode_xxx_official.hdf5
 ```
 
-Accepted data must have decodable cameras, aligned state/actions, preserved timestamps, no valid-sample gap above 200 ms, and no recorder backpressure. Keep debug and synthetic outputs in `validation/`, never in `data/`.
+Accepted data must have decodable cameras, aligned state/actions, preserved timestamps, and no recorder backpressure. Wall-clock gaps above 200 ms are recorded for review but do not automatically reject an operator-saved episode. Keep debug and synthetic outputs in `validation/`, never in `data/`.
 
 Runtime tokens, logs, PID files, TLS material, scene state, external assets, and collected data must not be committed.
 
@@ -88,6 +88,14 @@ Runtime tokens, logs, PID files, TLS material, scene state, external assets, and
 ## Updates
 
 Every code, configuration, or documentation change must update this section with the date, specific changes, verification performed, and remaining limitations.
+
+### 2026-09-26
+
+- Added scripted support-arm execution and froze automatic task motion until recording for the affected sorting, Kong, tic-tac-toe, and conveyor tasks.
+- Added task-rebuild progress on the headset and spectator pages, clearer automatic-motion state, and warnings when a disconnected control channel cannot start recording.
+- Preserved orphaned partial-episode IDs and the source HDF5 chunk/compression settings during official-format export.
+- Changed wall-clock gaps above 200 ms from an automatic rejection condition to recorded acceptance evidence requiring review.
+- Verification: 40 CPU/protocol tests passed in an isolated Piper-side copy; Python compilation plus JavaScript and Shell syntax checks passed. Isaac Sim and an end-to-end headset collection were not restarted for this release.
 
 ### 2026-09-25
 

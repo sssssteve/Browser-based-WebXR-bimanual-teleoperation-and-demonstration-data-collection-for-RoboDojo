@@ -7,6 +7,8 @@ const phaseElement = document.querySelector('#phase');
 const taskCountElement = document.querySelector('#task-count');
 const totalCountElement = document.querySelector('#total-count');
 const frameCountElement = document.querySelector('#frame-count');
+const lifecycleBar = document.querySelector('#lifecycle-bar');
+const lifecycleLabel = document.querySelector('#lifecycle-label');
 const menuElement = document.querySelector('#menu');
 const menuTitleElement = document.querySelector('#menu-title');
 const menuBodyElement = document.querySelector('#menu-body');
@@ -17,6 +19,26 @@ let socket, reconnectTimer, statusReceivedAt = 0, transferMs = 0, decodeMs = 0;
 let frameNumber = 0, drawnFrame = 0, lastMessage = 0;
 let pendingFrame = null, decodeRunning = false;
 let envEpoch = null;
+
+function renderLifecycleProgress(msg) {
+  const lifecycle=msg.lifecycle || {}, operation=msg.operation || lifecycle.operation || {};
+  const raw=lifecycle.phase || operation.phase || msg.phase || 'starting';
+  const ready=(msg.phase === 'ready' || msg.phase === 'recording') && operation.status !== 'running';
+  const stages=[
+    [/shutdown|restart_requested/,15,'正在关闭旧场景'],
+    [/process_start|starting/,28,'正在启动新空间'],
+    [/initialize_env/,45,'正在创建仿真环境'],
+    [/initialize_reset|reset_seed|reset_physics/,62,'正在重置场景'],
+    [/initialize_episode/,74,'正在初始化任务'],
+    [/initialize_render|render_enter/,86,'正在初始化渲染'],
+    [/first_observation|capture/,95,'正在获取三相机首帧'],
+  ];
+  const stage=ready ? [null,100,'空间已就绪'] : stages.find(([pattern]) => pattern.test(raw)) || [null,8,'已接受任务切换'];
+  const target=operation.target_task || lifecycle.task || msg.task || '目标任务';
+  const elapsed=Number(lifecycle.phase_duration_ms ?? operation.duration_ms);
+  lifecycleBar.value=stage[1];
+  lifecycleLabel.textContent=`${target} · ${stage[2]} · ${stage[1]}%${Number.isFinite(elapsed) ? ` · 本阶段 ${(elapsed/1000).toFixed(1)} 秒` : ''}`;
+}
 
 function renderVrMenu(ui) {
   if (!ui?.open) {
@@ -53,6 +75,7 @@ function connect() {
         pendingFrame=null; context.fillStyle='#080e15'; context.fillRect(0,0,1280,720);
       }
       envEpoch=msg.env_epoch;
+      renderLifecycleProgress(msg);
       statusReceivedAt=performance.now();
       const phase={starting:'启动中',ready:'已就绪',recording:'录制中'}[msg.phase] || msg.phase;
       const input=msg.input || {}, cycle=msg.cycle_ms || {}, writer=msg.recording_writer || {};
@@ -75,8 +98,10 @@ function connect() {
         recordingElement.textContent='○ 当前未录制';
       }
       const step=msg.step_profile || {}, obs=msg.observation_profile || {};
+      const motion=({waiting_for_recording:'等待录制，场景自动运动已冻结',recording_active:'录制中，场景自动运动已放行',not_gated:'普通静态任务'}[msg.task_motion] || '未知');
       statusElement.textContent=`${msg.task || ''} · ${phase} · epoch ${msg.env_epoch ?? '-'} · tick ${msg.sim_tick ?? '-'} · ${msg.wall_hz || 0} Hz\n`+
         `录制 ${msg.phase === 'recording' ? '是' : '否'} · 当前 ${msg.frames || 0} 帧 · 当前任务已验收 ${taskCount} 条 · 全部任务已验收 ${totalCount} 条\n`+
+        `场景运动 ${motion}\n`+
         `输入 ${input.state || '未知'} · 收到/应用 ${input.received_seq ?? '-'}/${input.applied_seq ?? '-'} · 年龄 ${input.effective_age_ms ?? '-'} ms · tracking L/R ${input.left_tracking ? '有' : '无'}/${input.right_tracking ? '有' : '无'}\n`+
         `遥操 ${msg.teleop_allowed ? '允许' : '保持'} · 原因 ${msg.hold_reason || '-'} · IK ${JSON.stringify(msg.ik_status || {})}\n`+
         `周期 ms 当前/p50/p95/p99/max ${cycle.current ?? '-'}/${cycle.p50 ?? '-'}/${cycle.p95 ?? '-'}/${cycle.p99 ?? '-'}/${cycle.max ?? '-'}\n`+
@@ -94,6 +119,7 @@ function connect() {
     recordingElement.dataset.state='error';
     recordingElement.textContent='● 监看连接已断开';
     phaseElement.textContent='连接断开';
+    lifecycleLabel.textContent=`连接中断，保留最近进度 ${lifecycleBar.value}%`;
     renderVrMenu(null);
     if (!reconnectTimer) reconnectTimer=setTimeout(() => { reconnectTimer=null; connect(); },1500);
   };

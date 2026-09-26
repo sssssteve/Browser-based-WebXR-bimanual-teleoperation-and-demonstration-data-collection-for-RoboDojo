@@ -76,7 +76,7 @@ python -m pip install -r requirements.txt
 python export_official_hdf5.py data/episode_xxx.hdf5 data/episode_xxx_official.hdf5
 ```
 
-合格数据要求：三路相机可解码、状态和动作逐帧对齐、保留真实时间戳、有效样本间隔不超过 200 ms，并且 recorder 无 backpressure。调试和合成数据只能放入 `validation/`，不得混入 `data/`。
+合格数据要求：三路相机可解码、状态和动作逐帧对齐、保留真实时间戳，并且 recorder 无 backpressure。超过 200 ms 的真实时间间隔会被记录供验收复核，但不会仅凭这一项自动拒绝操作员保存的轨迹。调试和合成数据只能放入 `validation/`，不得混入 `data/`。
 
 运行时 token、日志、PID、TLS 材料、场景状态、外部资产和采集数据均不得提交到仓库。
 
@@ -88,6 +88,14 @@ python export_official_hdf5.py data/episode_xxx.hdf5 data/episode_xxx_official.h
 ## 更新记录
 
 每次修改代码、配置或文档，都必须在这里记录日期、具体改动、实际验证以及仍未验证的内容。
+
+### 2026-09-26
+
+- 支持带脚本辅助机械臂的任务，并在录制开始前冻结相关排序、Kong、井字棋和传送带任务的自动运动。
+- 在头显和电脑监看页面增加空间重建进度、自动运动状态，以及控制通道断开时无法开始录制的明确提示。
+- 为孤立的 partial 轨迹保留 episode 编号，并在导出官方格式时保留源 HDF5 的分块和压缩设置。
+- 将超过 200 ms 的真实时间间隔从自动拒绝条件改为需要人工复核的验收证据。
+- 验证：候选版本在 Piper 独立目录通过 40 个 CPU/协议测试，并通过 Python 编译、JavaScript 与 Shell 语法检查。本次未重启 Isaac Sim，也未执行头显端到端采集。
 
 ### 2026-09-25
 

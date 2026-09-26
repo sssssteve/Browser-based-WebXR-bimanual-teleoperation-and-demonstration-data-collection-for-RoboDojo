@@ -19,6 +19,11 @@ from prompts_zh import PROMPTS_ZH, chinese_prompt
 from watchdog import ProgressFile
 
 TASK_SWITCH_EXIT = 75
+SUPPORT_MOTION_GATED_TASKS = {
+    "imitate_sorting_sequence", "make_kong", "play_tic_tac_toe",
+}
+FULL_SIM_GATED_TASKS = {"match_and_pick_from_conveyor", "pick_from_conveyor_by_image"}
+RECORDING_GATED_TASKS = SUPPORT_MOTION_GATED_TASKS | FULL_SIM_GATED_TASKS
 
 
 def available_tasks(root):
@@ -710,8 +715,15 @@ def main():
                 bridge.mark_applied(packet)
                 input_status["applied_seq"] = packet["seq"]
                 applied_seq = packet["seq"]
-            if homing:
-                last_command, home_complete, home_error = backend.home_step()
+            task_motion_waiting = args.task in RECORDING_GATED_TASKS and recorder is None
+            full_sim_waiting = args.task in FULL_SIM_GATED_TASKS and recorder is None
+            task_motion_enabled = not task_motion_waiting
+            if full_sim_waiting:
+                next_observation = observation
+                control_ms = (time.monotonic() - control_start) * 1000
+            elif homing:
+                last_command, home_complete, home_error = backend.home_step(
+                    task_motion_enabled=task_motion_enabled)
                 homing_steps += 1
                 if home_complete:
                     homing = False
@@ -724,9 +736,11 @@ def main():
             else:
                 targets, grippers = controller.targets(
                     packet, backend.poses(), transient_gap=transient_gap)
-                last_command = backend.step(targets, grippers)
-            control_ms = (time.monotonic() - control_start) * 1000
-            next_observation = backend.observation()
+                last_command = backend.step(
+                    targets, grippers, task_motion_enabled=task_motion_enabled)
+            if not full_sim_waiting:
+                control_ms = (time.monotonic() - control_start) * 1000
+                next_observation = backend.observation()
             record_enqueue_ms = 0.
             if recorder is not None:
                 record_start = time.monotonic()
@@ -762,10 +776,14 @@ def main():
                       "scene_seed": backend.seed, "random_scene": scene_state["enabled"],
                       "layout_count": layout_count,
                       "scene_objects": scene_objects(backend.layout), "control_scale": args.scale,
+                      "task_motion": ("waiting_for_recording" if task_motion_waiting else
+                                      "recording_active" if args.task in RECORDING_GATED_TASKS else
+                                      "not_gated"),
                       "control_ms": round(control_ms, 1),
                       "record_enqueue_ms": round(record_enqueue_ms, 1),
                       "recording_writer": recorder_status,
                       "ik_status": backend.last_ik_status,
+                      "support_motion_steps": backend.support_motion_steps,
                       "lifecycle": dict(progress.state),
                       "observation_profile": backend.last_observation_profile,
                       "step_profile": backend.last_step_profile}

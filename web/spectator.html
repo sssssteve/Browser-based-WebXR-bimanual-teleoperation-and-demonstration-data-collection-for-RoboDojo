@@ -7,6 +7,9 @@
 #summary{display:flex;gap:10px;padding:12px 190px 12px 18px;flex-wrap:wrap;background:#101b26}
 .metric{min-width:145px;padding:9px 13px;border-radius:8px;background:#1b3042}.metric b{display:block;color:#8fb4ca;font-size:13px}.metric span{font-size:20px;font-weight:700}
 .prompt{padding:10px 20px;background:#172635;border-left:6px solid #73e5b3;font-size:20px}
+#lifecycle-progress{padding:10px 12px;margin:0 0 14px;background:#132331;border-radius:8px;display:grid;grid-template-columns:auto minmax(120px,1fr);gap:8px 12px;align-items:center}
+#lifecycle-label{color:#a9dacc}#lifecycle-bar{width:100%;height:14px;accent-color:#73e5b3}
+#lifecycle-label{grid-column:1/-1;font-size:13px}
 #workspace{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,27vw);gap:12px;padding:12px}
 #viewport{position:relative;min-width:0;min-height:0;background:#080e15;border-radius:10px;overflow:hidden}
 #preview{width:100%;height:100%;object-fit:contain;background:#080e15}
@@ -33,7 +36,7 @@
     <div id="viewport"><canvas id="preview" width="1280" height="720"></canvas>
       <section id="menu" hidden aria-live="polite"><h2 id="menu-title"></h2><div id="menu-body"></div><ol id="menu-items"></ol><p id="menu-help">摇杆上下选择 · 扳机确认 · B 返回 · 按下摇杆关闭菜单</p></section>
     </div>
-    <aside id="details"><h2>实时监测详情</h2><pre id="status">连接中…</pre></aside>
+    <aside id="details"><h2>实时监测详情</h2><div id="lifecycle-progress"><b>空间重建进度</b><progress id="lifecycle-bar" max="100" value="0"></progress><span id="lifecycle-label">等待服务状态…</span></div><pre id="status">连接中…</pre></aside>
   </div>
 </div>
 <script type="module" src="/spectator.js"></script></html>

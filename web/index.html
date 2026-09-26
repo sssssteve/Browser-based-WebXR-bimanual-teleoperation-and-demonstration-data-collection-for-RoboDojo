@@ -10,9 +10,12 @@ h1{font-size:28px}button,select,.button-link{font:inherit;padding:12px 20px;bord
 #preview{width:100%;max-width:800px;background:#080e15;border-radius:10px}small{color:#aebdca}#xr{display:none}
 .panel{background:#172635;border-radius:10px;padding:12px;margin:14px 0}select{max-width:520px}
 .prompt{border-left:5px solid #73e5b3;font-size:20px}.prompt p{margin:8px 0;line-height:1.6}
+.lifecycle-head{display:flex;justify-content:space-between;gap:12px}.lifecycle-head span{color:#a9dacc}
+progress{display:block;width:100%;height:16px;margin-top:10px;accent-color:#73e5b3}
 </style>
 <h1>RoboDojo · VR 数采</h1>
 <div class="panel prompt"><b>当前任务 Prompt</b><p id="active-prompt">等待任务信息…</p></div>
+<div class="panel" id="lifecycle-progress"><div class="lifecycle-head"><b>空间重建进度</b><span id="lifecycle-label">等待服务状态…</span></div><progress id="lifecycle-bar" max="100" value="0"></progress></div>
 <div class="panel"><b>Meta Touch / Pico 手柄按键</b>
 <p>双手侧握键：按住时移动对应机械臂，松开后机械臂保持；首次进入、重连或重新对齐后，必须先松开双手侧握键一次。</p>
 <p>双手扳机：控制对应夹爪开合。左 X：开始录制；左 Y：保存录制；右 A：双臂复位到初始位；右 B：重置当前场景。</p>

@@ -4,6 +4,8 @@ const direct = connection.get('direct') || '';
 const statusElement = document.querySelector('#status');
 const preview = document.querySelector('#preview');
 const previewContext = preview.getContext('2d');
+const lifecycleBar = document.querySelector('#lifecycle-bar');
+const lifecycleLabel = document.querySelector('#lifecycle-label');
 const base = direct ? `ws://${direct}` : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
 document.querySelector('#spectator-link').href = `/spectator#${new URLSearchParams({token})}`;
 let input, video, session, reference, gl, program, texture, sequence = 0;
@@ -30,6 +32,26 @@ banner.width = 1024; banner.height = 880;
 const context = banner.getContext('2d');
 
 function show(text) { statusElement.textContent = text; }
+function renderLifecycleProgress(msg) {
+  const lifecycle = msg.lifecycle || {};
+  const operation = msg.operation || lifecycle.operation || {};
+  const raw = lifecycle.phase || operation.phase || msg.phase || 'starting';
+  const ready = (msg.phase === 'ready' || msg.phase === 'recording') && operation.status !== 'running';
+  const stages = [
+    [/shutdown|restart_requested/, 15, '正在关闭旧场景'],
+    [/process_start|starting/, 28, '正在启动新空间'],
+    [/initialize_env/, 45, '正在创建仿真环境'],
+    [/initialize_reset|reset_seed|reset_physics/, 62, '正在重置场景'],
+    [/initialize_episode/, 74, '正在初始化任务'],
+    [/initialize_render|render_enter/, 86, '正在初始化渲染'],
+    [/first_observation|capture/, 95, '正在获取三相机首帧'],
+  ];
+  const stage = ready ? [null, 100, '空间已就绪'] : stages.find(([pattern]) => pattern.test(raw)) || [null, 8, '已接受任务切换'];
+  const target = operation.target_task || lifecycle.task || msg.task || '目标任务';
+  const elapsed = Number(lifecycle.phase_duration_ms ?? operation.duration_ms);
+  lifecycleBar.value = stage[1];
+  lifecycleLabel.textContent = `${target} · ${stage[2]} · ${stage[1]}%${Number.isFinite(elapsed) ? ` · 本阶段 ${(elapsed / 1000).toFixed(1)} 秒` : ''}`;
+}
 function collectedCount(task) { return Number(latestStatus.episode_counts?.[task] || 0); }
 function taskLabel(task) {
   const variant = task.endsWith('_random') ? ' · 官方随机干扰任务' : '';
@@ -61,6 +83,8 @@ function command(name, value) {
         ? '控制通道重连中；更换官方布局请求已排队。'
         : `控制通道重连中；布局轮换${value ? '开启' : '关闭'}请求已排队。`);
     }
+  } else if (name === 'record' || name === 'record_recovery') {
+    show('控制通道未连接，录制命令未发送；重连后请重新按 X。');
   }
 }
 document.querySelectorAll('[data-command]').forEach(button => {
@@ -179,6 +203,7 @@ function connectVideo() {
       }
       lastEnvEpoch = msg.env_epoch;
       latestStatus = msg;
+      renderLifecycleProgress(msg);
       statusReceivedAt = performance.now();
       panelDirty = true;
       if (!menuSyncSupported && Object.hasOwn(msg, 'vr_ui')) {
@@ -193,7 +218,8 @@ function connectVideo() {
           ({starting: '启动中', ready: '已就绪', recording: '录制中'}[msg.phase] || msg.phase);
         const inputState = msg.input?.state || '未知';
         const lifecycle = msg.lifecycle?.phase || msg.operation?.phase || phase;
-        show(`${msg.task || ''} · ${phase} · 已采 ${collectedCount(msg.task)} 条 · ${msg.frames || 0} 帧 · epoch ${msg.env_epoch ?? '-'}\n${msg.message || ''}\n输入 ${inputState} · 来源 ${msg.input?.active_source || '-'} · 页面 ${msg.input?.client_count ?? 0} · 收到/应用 ${msg.input?.received_seq ?? '-'}/${msg.input?.applied_seq ?? '-'} · 保持原因 ${msg.hold_reason || '-'}\n生命周期 ${lifecycle} · 实际仿真 ${msg.wall_hz || 0} Hz · 网络 RTT ${Math.round(networkRtt)} ms · 传输 ${Math.round(videoTransferMs)} ms · 解码 ${Math.round(videoDecodeMs)} ms`);
+        const motion = ({waiting_for_recording:'等待录制，场景自动运动已冻结',recording_active:'录制中，场景自动运动已放行',not_gated:'普通静态任务'}[msg.task_motion] || '未知');
+        show(`${msg.task || ''} · ${phase} · 已采 ${collectedCount(msg.task)} 条 · ${msg.frames || 0} 帧 · epoch ${msg.env_epoch ?? '-'}\n${msg.message || ''}\n场景运动 ${motion}\n输入 ${inputState} · 来源 ${msg.input?.active_source || '-'} · 页面 ${msg.input?.client_count ?? 0} · 收到/应用 ${msg.input?.received_seq ?? '-'}/${msg.input?.applied_seq ?? '-'} · 保持原因 ${msg.hold_reason || '-'}\n生命周期 ${lifecycle} · 实际仿真 ${msg.wall_hz || 0} Hz · 网络 RTT ${Math.round(networkRtt)} ms · 传输 ${Math.round(videoTransferMs)} ms · 解码 ${Math.round(videoDecodeMs)} ms`);
         refreshTaskSelect();
         refreshEpisodeSelect();
         const random = document.querySelector('#random-scene');
@@ -263,7 +289,11 @@ function refreshTaskSelect() {
 async function fetchTaskCatalog() {
   try {
     const response = await fetch(`/catalog?token=${encodeURIComponent(token)}`, {cache: 'no-store'});
-    if (response.ok) taskCatalog = await response.json();
+    if (response.ok) {
+      taskCatalog = await response.json();
+      if (!latestStatus.tasks?.length) latestStatus.tasks = Object.keys(taskCatalog);
+      refreshTaskSelect();
+    }
     for (const option of document.querySelectorAll('#task option')) {
       option.textContent = taskLabel(option.value);
     }
@@ -500,7 +530,8 @@ function drawMenu() {
   context.fillText('摇杆上下选择 · 扳机确认 · B 返回 · 按下摇杆关闭菜单',150,755);
 }
 function drawPanel(time, viewer) {
-  const warning = time-lastVideoTime > 2000 ? '画面更新较慢，手柄连接保持中'
+  const warning = input?.readyState !== WebSocket.OPEN ? '控制通道未连接，录制命令未发送'
+    : time-lastVideoTime > 2000 ? '画面更新较慢，手柄连接保持中'
     : (latestStatus.release_required ? '首次接管或重连后，请松开双手侧握键一次' : '');
   if (warning !== panelWarning) { panelWarning = warning; panelDirty = true; }
   if (panelDirty) {
@@ -704,14 +735,14 @@ function frame(time, xrFrame) {
     wasVisible=true;
     const hands = {};
     for (const source of sources) {
-      const pose = xrFrame.getPose(source.gripSpace,reference);
-      if (!pose || pose.emulatedPosition) continue;
-      const {position:p,orientation:q} = pose.transform;
       const buttons = source.gamepad.buttons;
-      hands[source.handedness] = {pose:[p.x,p.y,p.z,q.x,q.y,q.z,q.w],trigger:buttons[0]?.value || 0,squeeze:buttons[1]?.value || 0};
       for (const [index,name] of [[4,source.handedness==='left'?'record':'home'],[5,source.handedness==='left'?'save':'reset']]) {
         if (edge(`${source.handedness}-shortcut-${index}`,!!buttons[index]?.pressed)) command(name);
       }
+      const pose = xrFrame.getPose(source.gripSpace,reference);
+      if (!pose || pose.emulatedPosition) continue;
+      const {position:p,orientation:q} = pose.transform;
+      hands[source.handedness] = {pose:[p.x,p.y,p.z,q.x,q.y,q.z,q.w],trigger:buttons[0]?.value || 0,squeeze:buttons[1]?.value || 0};
     }
     sendPosePacket(time, hands);
   }

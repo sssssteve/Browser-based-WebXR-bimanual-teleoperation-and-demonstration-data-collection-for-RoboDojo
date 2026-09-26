@@ -23,7 +23,9 @@ from recording import (AsyncRecorder, CAMERAS, Recorder, RecorderBackpressure,
                        read_snapshot)
 from robodojo import RoboDojo
 from server import Bridge, create_app, parse_command
-from run import (load_scene_state, preview_mosaic, select_task_layout, task_catalog,
+from run import (FULL_SIM_GATED_TASKS, RECORDING_GATED_TASKS,
+                 SUPPORT_MOTION_GATED_TASKS, available_tasks, load_scene_state, preview_mosaic,
+                 select_task_layout, task_catalog,
                  task_identity, task_runtime_device)
 from prompts_zh import PROMPTS_ZH, chinese_prompt
 from watchdog import ProgressFile, read_progress, supervise
@@ -188,7 +190,7 @@ def test_episode_roundtrip_and_alignment(tmp_path):
         assert f.attrs["quality_pass"]
 
 
-def test_official_layout_and_wall_gap_quality_gate(tmp_path):
+def test_official_layout_reports_wall_gaps_without_rejecting_episode(tmp_path):
     metadata = {"task": "stack_blocks", "embodiment": "arx_x5",
                 "input_source": "meta_quest_webxr", "max_wall_gap_s": .2}
     command = {"left_arm_joint_states": np.ones(6)}
@@ -199,16 +201,28 @@ def test_official_layout_and_wall_gap_quality_gate(tmp_path):
     assert good_path.relative_to(tmp_path).parts[:4] == ("RoboDojo", "stack_blocks", "arx_x5", "data")
     assert good_path.name == "episode_0000000.hdf5"
 
-    bad = Recorder(tmp_path, metadata, observation(0))
-    bad.append(observation(0), observation(1), command, packet(), 0., 100.)
-    bad.append(observation(1), observation(2), command, packet(seq=1), .04, 100.5)
-    bad_path = bad.finish(False, "operator_save")
-    assert bad_path.relative_to(tmp_path).parts[:2] == ("rejected", "stack_blocks")
-    with h5py.File(bad_path) as file:
-        assert not file.attrs["quality_pass"]
-        assert not file.attrs["training_eligible"]
+    delayed = Recorder(tmp_path, metadata, observation(0))
+    delayed.append(observation(0), observation(1), command, packet(), 0., 100.)
+    delayed.append(observation(1), observation(2), command, packet(seq=1), .04, 100.5)
+    delayed_path = delayed.finish(False, "operator_save")
+    assert delayed_path.relative_to(tmp_path).parts[:4] == (
+        "RoboDojo", "stack_blocks", "arx_x5", "data")
+    with h5py.File(delayed_path) as file:
+        assert file.attrs["quality_pass"]
         assert file.attrs["timing_wall_gap_count"] == 1
-    assert [item["name"] for item in list_episodes(tmp_path, task="stack_blocks")] == [good_path.name]
+    assert [item["name"] for item in list_episodes(tmp_path, task="stack_blocks")] == [
+        delayed_path.name, good_path.name]
+
+
+def test_recorder_skips_an_orphaned_partial_episode_id(tmp_path):
+    staging = tmp_path / "staging/stack_blocks/arx_x5"
+    staging.mkdir(parents=True)
+    (staging / "episode_0000003.partial.hdf5").touch()
+
+    recorder = Recorder(tmp_path, {"task": "stack_blocks"}, observation(0))
+
+    assert recorder.episode_name == "episode_0000004.hdf5"
+    recorder.discard()
 
 
 def test_export_official_hdf5_uses_command_and_omits_extra_fields(tmp_path):
@@ -329,12 +343,14 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
                     assert response.status == 200 and 'Pico' in page
                     assert 'id="debug"' in page and '桌面模拟 VR 输入' in page
                     assert 'id="spectator-link"' in page and '打开 PC 监看页面' in page
+                    assert 'id="lifecycle-bar"' in page and '空间重建进度' in page
                 async with client.get(base + '/client.js') as response:
                     assert response.status == 200 and 'javascript' in response.content_type
                     client_js = await response.text()
                     assert 'function connect()' in client_js
                     assert 'function desktopDebugFrame(time)' in client_js
                     assert 'if (!menuSyncSupported' in client_js
+                    assert 'function renderLifecycleProgress' in client_js
                     assert '/spectator#${' in client_js
                     assert 'window.close()' not in client_js and "location.replace('about:blank')" not in client_js
                     assert "window.addEventListener('blur', releaseDesktopDebugControls)" in client_js
@@ -343,10 +359,12 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
                     assert response.status == 200 and '4090' in spectator_page
                     assert 'id="recording"' in spectator_page
                     assert 'id="menu"' in spectator_page and '当前任务已验收保存' in spectator_page
+                    assert 'id="lifecycle-bar"' in spectator_page and '空间重建进度' in spectator_page
                 async with client.get(base + '/spectator.js') as response:
                     assert response.status == 200 and 'javascript' in response.content_type
                     spectator_js = await response.text()
                     assert '正在录制' in spectator_js and 'renderVrMenu(msg.vr_ui)' in spectator_js
+                    assert 'function renderLifecycleProgress' in spectator_js
                 async with client.ws_connect(base + '/input?token=test-token') as ws:
                     observer = await client.ws_connect(base + '/input?token=test-token')
                     assert len(bridge.clients) == 2 and bridge.owner is None
@@ -508,6 +526,31 @@ def test_task_catalog_uses_official_instruction_and_success_requirement(tmp_path
     assert "双臂回到初始位" in result["success"]
 
 
+def test_available_tasks_keeps_scripted_support_arm_tasks(tmp_path):
+    for task in ("stack_blocks", "make_kong"):
+        (tmp_path / f"Assets/Eval_Layout/RoboDojo/arx_x5/0/{task}_0.json").parent.mkdir(
+            parents=True, exist_ok=True)
+        (tmp_path / f"Assets/Eval_Layout/RoboDojo/arx_x5/0/{task}_0.json").write_text("{}")
+        (tmp_path / f"task/RoboDojo/config/{task}.yml").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f"task/RoboDojo/config/{task}.yml").write_text("{}")
+        (tmp_path / f"task/RoboDojo/tasks/{task}.py").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f"task/RoboDojo/tasks/{task}.py").write_text("")
+    (tmp_path / "task/RoboDojo/config/_task.yml").write_text(
+        "common:\n  robot_config: dual_x5\ntasks:\n"
+        "  stack_blocks:\n    eval_nums: 25\n"
+        "  make_kong:\n    robot_config: dual_x5_and_franka_competition\n")
+
+    assert available_tasks(tmp_path) == ["make_kong", "stack_blocks"]
+
+
+def test_automatic_motion_tasks_are_recording_gated():
+    assert SUPPORT_MOTION_GATED_TASKS == {
+        "imitate_sorting_sequence", "make_kong", "play_tic_tac_toe"}
+    assert FULL_SIM_GATED_TASKS == {
+        "match_and_pick_from_conveyor", "pick_from_conveyor_by_image"}
+    assert RECORDING_GATED_TASKS == SUPPORT_MOTION_GATED_TASKS | FULL_SIM_GATED_TASKS
+
+
 def test_all_tasks_have_chinese_prompts_and_dynamic_values_are_preserved():
     assert len(PROMPTS_ZH) == 54
     assert all(any('\u3400' <= char <= '\u9fff' for char in prompt) for prompt in PROMPTS_ZH.values())
@@ -546,8 +589,9 @@ def test_home_command_and_incremental_joint_targets():
     backend.hold_grippers = {side: 0. for side in backend.robots}
     backend.joints = lambda side: positions[side].copy()
 
-    def step(targets, grippers):
+    def step(targets, grippers, task_motion_enabled=True):
         assert targets == {} and grippers == {}
+        assert task_motion_enabled
         for side in positions:
             positions[side] = backend.hold_joints[side].copy()
         return {f"{side}_arm_joint_states": positions[side].copy() for side in positions}

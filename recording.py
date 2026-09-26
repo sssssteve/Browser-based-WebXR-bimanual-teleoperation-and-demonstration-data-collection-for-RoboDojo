@@ -56,7 +56,8 @@ class Recorder:
             ids = []
             for path in self.root.rglob("episode_*.hdf5"):
                 try:
-                    ids.append(int(path.stem.removeprefix("episode_")))
+                    episode_id = path.name.removeprefix("episode_").removesuffix(".hdf5")
+                    ids.append(int(episode_id.removesuffix(".partial")))
                 except ValueError:
                     pass
             self.episode_name = f"episode_{max(ids, default=-1) + 1:07d}.hdf5"
@@ -428,8 +429,6 @@ def _inspect_open_file(file, require_complete=True, max_wall_gap_s=.2):
                 image.load()
                 assert image.size == (640, 480), f"Wrong image size for {camera}"
     timing = _timing_report(file, max_wall_gap_s)["timing"]
-    assert timing["wall_gap_count"] == 0, (
-        f"Wall-clock gap exceeded {max_wall_gap_s:g}s; max={timing['wall_gap_max_s']:.3f}s")
     raw_metadata = file["metadata/json"][()]
     source = json.loads(raw_metadata.decode() if isinstance(raw_metadata, bytes) else raw_metadata)
     return {"frames": count, "cameras": list(CAMERAS),

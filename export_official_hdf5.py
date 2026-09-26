@@ -43,7 +43,10 @@ def export_episode(source, destination):
                 for name in ("shape", "intrinsic_matrix"):
                     raw.copy(f"{prefix}/{name}", out.require_group(prefix), name=name)
                 for name in ("colors", "extrinsic_matrix"):
-                    out[f"{prefix}/{name}"] = raw[f"{prefix}/{name}"][:count]
+                    source_dataset = raw[f"{prefix}/{name}"]
+                    chunks = (min(source_dataset.chunks[0], count), *source_dataset.chunks[1:])
+                    out.create_dataset(f"{prefix}/{name}", data=source_dataset[:count],
+                                       chunks=chunks, compression=source_dataset.compression)
     return destination
 
 

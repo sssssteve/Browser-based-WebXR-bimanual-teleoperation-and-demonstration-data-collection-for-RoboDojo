@@ -66,10 +66,12 @@ class RoboDojo:
         for obj in self.env.scene_manager.get_objects([0], object_type="geometry").values():
             if hasattr(obj.env_origin, "detach"):
                 obj.env_origin = obj.env_origin.detach().cpu()
-        robots = self.env.robot_manager.robot_list
-        if len(robots) != 2 or any(r.type != "target" or r.ee_type != "gripper" for r in robots):
-            raise ValueError("This collector supports dual-arm gripper tasks without a scripted support arm")
+        robots = [robot for robot in self.env.robot_manager.robot_list if robot.type == "target"]
+        if len(robots) != 2 or any(robot.ee_type != "gripper" for robot in robots):
+            raise ValueError("This collector requires two target gripper arms")
         self.robots = {r.arm_name.split("_")[0]: r for r in robots}
+        self.support_robots = [robot for robot in self.env.robot_manager.robot_list
+                               if robot.type != "target"]
         if set(self.robots) != {"left", "right"}:
             raise ValueError("Expected left and right target arms")
         obs_config = deepcopy(base["observation"])
@@ -82,7 +84,10 @@ class RoboDojo:
             raise ValueError("Physics dt must divide the 25 Hz recording interval")
         self.ticks = 0
         self.ik_failures = 0
+        self.support_motion_steps = 0
         self.last_ik_status = {side: "not_requested" for side in self.robots}
+        self.last_step_profile = {"solve_ms": 0., "physics_ms": 0., "reward_ms": 0.,
+                                  "substeps": self.substeps}
         self._initialize_episode()
 
     def reset(self):
@@ -187,14 +192,14 @@ class RoboDojo:
         }
         return result
 
-    def home_step(self, max_joint_step=.05, tolerance=.025):
+    def home_step(self, max_joint_step=.05, tolerance=.025, task_motion_enabled=True):
         """Move both arms toward their episode-start joints through one recorded control step."""
         for side in self.robots:
             current = self.joints(side)
             delta = self.home_joints[side] - current
             self.hold_joints[side] = current + np.clip(delta, -max_joint_step, max_joint_step)
             self.hold_grippers[side] = 1.
-        command = self.step({}, {})
+        command = self.step({}, {}, task_motion_enabled=task_motion_enabled)
         error = max(float(np.max(np.abs(self.home_joints[side] - self.joints(side))))
                     for side in self.robots)
         done = error <= tolerance
@@ -202,7 +207,7 @@ class RoboDojo:
                                for side in self.robots}
         return command, done, error
 
-    def step(self, targets, grippers):
+    def step(self, targets, grippers, task_motion_enabled=True):
         from env.robot_manager.control_manager import MetaControl
 
         self.phase_callback("ik_enter", sim_tick=self.ticks)
@@ -229,9 +234,25 @@ class RoboDojo:
         for side in self.robots:
             command[f"{side}_arm_joint_states"] = self.hold_joints[side].copy()
             command[f"{side}_ee_joint_states"] = np.array([self.hold_grippers[side]])
+        support_hold = {}
+        for robot in self.support_robots:
+            support_hold[self.env.robot_manager.process_name(robot.arm_name)] = {
+                "position": self.env.robot_manager.get_joint(robot, [0])[0]}
+            gripper = self.env.robot_manager.get_end_effector_real_val(robot, [0])[0]
+            support_hold[self.env.robot_manager.process_name(robot.gripper_name)] = {
+                "position": [np.asarray(gripper).reshape(-1)[0]]}
+        if task_motion_enabled and getattr(self.env, "interact", False):
+            if hasattr(self.env, "query_support_arm_traj"):
+                self.env.query_support_arm_traj(0)
         self.phase_callback("physics_enter", sim_tick=self.ticks, physics_calls=self.substeps)
         for step in range(self.substeps):
-            control = {}
+            control = {name: dict(value) for name, value in support_hold.items()}
+            support_actions = getattr(self.env, "support_arm_action", None)
+            if task_motion_enabled and support_actions and support_actions[0]:
+                support_step = support_actions[0].pop(0)
+                control.update(support_step)
+                support_hold.update(support_step)
+                self.support_motion_steps += 1
             alpha = min((step + 1) / max(1, self.substeps * .8), 1.)
             for side, robot in self.robots.items():
                 control[self.env.robot_manager.process_name(robot.arm_name)] = {
@@ -249,6 +270,11 @@ class RoboDojo:
         self.phase_callback("physics_exit", sim_tick=self.ticks, physics_calls=self.substeps)
         self.phase_callback("reward_enter", sim_tick=self.ticks)
         self.env.reward_manager.step([0])
+        if task_motion_enabled and getattr(self.env, "interact", False):
+            if hasattr(self.env, "query_support_arm_traj"):
+                self.env.query_support_arm_traj(0)
+            if hasattr(self.env, "check_support_arm_stable"):
+                self.env.check_support_arm_stable(0)
         rewarded = time.perf_counter()
         self.phase_callback("reward_exit", sim_tick=self.ticks)
         self.ticks += 1
