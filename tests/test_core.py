@@ -81,8 +81,29 @@ def test_missing_connection_requires_release_before_motion():
     assert grippers["left"] == pytest.approx(.3)
     lost = packet(1.)
     del lost['hands']['right']
-    assert controller.targets(lost, poses) == ({}, {})
-    assert controller.require_release
+    targets, _ = controller.targets(lost, poses)
+    assert set(targets) == {"left"}
+    assert not controller.require_release
+
+
+def test_single_hand_tracking_loss_has_grace_and_requires_side_release(monkeypatch):
+    import control
+    now = [0.]
+    monkeypatch.setattr(control.time, "monotonic", lambda: now[0])
+    controller = Controller()
+    poses = {side: [0, 0, 1, 1, 0, 0, 0] for side in ("left", "right")}
+    controller.targets(packet(0.), poses)
+    assert set(controller.targets(packet(1.), poses)[0]) == {"left", "right"}
+    lost = packet(1.)
+    del lost["hands"]["right"]
+    assert set(controller.targets(lost, poses)[0]) == {"left"}
+    assert not controller.diagnostics()["side_release_required"]["right"]
+    now[0] = .2
+    assert set(controller.targets(lost, poses)[0]) == {"left"}
+    assert controller.diagnostics()["side_release_required"]["right"]
+    assert set(controller.targets(packet(1.), poses)[0]) == {"left"}
+    controller.targets(packet(0.), poses)
+    assert set(controller.targets(packet(1.), poses)[0]) == {"left", "right"}
 
 
 def test_transient_input_gap_holds_without_requiring_grip_release():
@@ -212,6 +233,23 @@ def test_official_layout_reports_wall_gaps_without_rejecting_episode(tmp_path):
         assert file.attrs["timing_wall_gap_count"] == 1
     assert [item["name"] for item in list_episodes(tmp_path, task="stack_blocks")] == [
         delayed_path.name, good_path.name]
+
+
+def test_missing_controller_packet_is_reported_without_rejecting_episode(tmp_path):
+    metadata = {"task": "stack_blocks", "embodiment": "arx_x5"}
+    command = {"left_arm_joint_states": np.ones(6)}
+    recorder = Recorder(tmp_path, metadata, observation(0))
+    recorder.append(observation(0), observation(1), command, packet(), 0., 100.)
+    recorder.append(observation(1), observation(2), command, None, .04, 100.05)
+
+    path = recorder.finish(True, "operator_save")
+
+    assert path.relative_to(tmp_path).parts[:4] == (
+        "RoboDojo", "stack_blocks", "arx_x5", "data")
+    with h5py.File(path) as file:
+        assert file.attrs["quality_pass"]
+        assert file.attrs["controller_input_missing_transition_count"] == 1
+        assert file.attrs["controller_input_valid_transition_count"] == 2
 
 
 def test_recorder_skips_an_orphaned_partial_episode_id(tmp_path):
@@ -359,12 +397,16 @@ def test_transport_auth_multiple_idle_clients_stale_input_and_independent_video(
                     assert response.status == 200 and '4090' in spectator_page
                     assert 'id="recording"' in spectator_page
                     assert 'id="menu"' in spectator_page and '当前任务已验收保存' in spectator_page
-                    assert 'id="lifecycle-bar"' in spectator_page and '空间重建进度' in spectator_page
+                    assert 'id="fullscreen-button"' in spectator_page
+                    assert 'id="fullscreen-hud"' in spectator_page
+                    assert 'id="quality-panel"' in spectator_page
                 async with client.get(base + '/spectator.js') as response:
                     assert response.status == 200 and 'javascript' in response.content_type
                     spectator_js = await response.text()
                     assert '正在录制' in spectator_js and 'renderVrMenu(msg.vr_ui)' in spectator_js
-                    assert 'function renderLifecycleProgress' in spectator_js
+                    assert 'requestFullscreen()' in spectator_js
+                    assert 'fullscreenRecordingElement' in spectator_js
+                    assert 'function renderQuality' in spectator_js
                 async with client.ws_connect(base + '/input?token=test-token') as ws:
                     observer = await client.ws_connect(base + '/input?token=test-token')
                     assert len(bridge.clients) == 2 and bridge.owner is None

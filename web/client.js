@@ -530,9 +530,13 @@ function drawMenu() {
   context.fillText('摇杆上下选择 · 扳机确认 · B 返回 · 按下摇杆关闭菜单',150,755);
 }
 function drawPanel(time, viewer) {
+  const sideRelease = latestStatus.side_release_required || {};
+  const releaseHand = sideRelease.left && sideRelease.right ? '双手' : sideRelease.left ? '左手' : sideRelease.right ? '右手' : '';
   const warning = input?.readyState !== WebSocket.OPEN ? '控制通道未连接，录制命令未发送'
+    : latestStatus.release_required ? '首次接管或重连后，请松开双手侧握键一次'
+    : releaseHand ? `${releaseHand}追踪中断，请松开对应侧握键后重新按住`
     : time-lastVideoTime > 2000 ? '画面更新较慢，手柄连接保持中'
-    : (latestStatus.release_required ? '首次接管或重连后，请松开双手侧握键一次' : '');
+    : '';
   if (warning !== panelWarning) { panelWarning = warning; panelDirty = true; }
   if (panelDirty) {
     context.fillStyle = '#101b26'; context.fillRect(0,0,1024,880);

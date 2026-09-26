@@ -76,7 +76,7 @@ Export a complete, successful, quality-approved episode to the official RoboDojo
 python export_official_hdf5.py data/episode_xxx.hdf5 data/episode_xxx_official.hdf5
 ```
 
-Accepted data must have decodable cameras, aligned state/actions, preserved timestamps, and no recorder backpressure. Wall-clock gaps above 200 ms are recorded for review but do not automatically reject an operator-saved episode. Keep debug and synthetic outputs in `validation/`, never in `data/`.
+Accepted data must have decodable cameras, aligned state/actions, preserved timestamps, and no recorder backpressure. Wall-clock gaps above 200 ms and missing controller transitions are recorded for review but do not automatically reject an operator-saved episode. Keep debug and synthetic outputs in `validation/`, never in `data/`.
 
 Runtime tokens, logs, PID files, TLS material, scene state, external assets, and collected data must not be committed.
 
@@ -88,6 +88,14 @@ Runtime tokens, logs, PID files, TLS material, scene state, external assets, and
 ## Updates
 
 Every code, configuration, or documentation change must update this section with the date, specific changes, verification performed, and remaining limitations.
+
+### 2026-09-26 · Tracking and spectator update
+
+- Added a 150 ms per-hand tracking grace period. A longer single-hand loss releases only that arm and requires that hand to release its grip before resuming; the tracked arm may continue.
+- Reworked the spectator page with fullscreen simulation view, recording/status overlays, live quality warnings, task success criteria, and the five most recent accepted episodes.
+- Recorded missing controller transitions in HDF5 metadata instead of rejecting a saved episode solely for that condition; these counts still require acceptance review.
+- Enabled the Isaac conveyor extension and kept preview observations fresh while conveyor tasks wait for recording.
+- Verification: 42 CPU/protocol tests passed in an isolated Piper-side copy; Python compilation plus JavaScript and Shell syntax checks passed. Isaac Sim and an end-to-end headset collection were not restarted for this update.
 
 ### 2026-09-26
 

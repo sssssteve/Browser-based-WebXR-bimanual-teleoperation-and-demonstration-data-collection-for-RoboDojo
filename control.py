@@ -1,10 +1,12 @@
 """WebXR input validation and clutch-relative bimanual end-effector targets."""
 from dataclasses import dataclass
+import time
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 SIDES = ("left", "right")
+TRACKING_GRACE_S = .15
 # WebXR: +x right, +y up, -z forward. RoboDojo: +x right, +y forward, +z up.
 XR_TO_WORLD = np.array([[1., 0., 0.], [0., 0., -1.], [0., 1., 0.]])
 
@@ -104,10 +106,14 @@ class Controller:
         self.teleop_paused = False
         self.hold_reason = "safety_release_required"
         self.teleop_allowed = False
+        self.missing_since = {side: None for side in SIDES}
+        self.side_release_required = {side: False for side in SIDES}
 
     def stop(self, reason="safety_release_required", paused=False):
         for clutch in self.clutches.values():
             clutch.release()
+        self.missing_since = {side: None for side in SIDES}
+        self.side_release_required = {side: False for side in SIDES}
         self.require_release = True
         self.teleop_paused = bool(paused)
         self.teleop_allowed = False
@@ -124,12 +130,9 @@ class Controller:
                 self.teleop_allowed = False
                 self.hold_reason = "input_gap"
             return {}, {}
-        if any(side not in packet["hands"] for side in SIDES):
-            self.stop("tracking_lost")
-            return {}, {}
         hands = packet["hands"]
         if self.teleop_paused:
-            if all(hands[side]["squeeze"] < .5 for side in SIDES):
+            if all(side in hands and hands[side]["squeeze"] < .5 for side in SIDES):
                 self.teleop_paused = False
                 self.require_release = False
             self.teleop_allowed = False
@@ -143,13 +146,34 @@ class Controller:
             self.hold_reason = "safety_release_required"
             return {}, {}
         targets, grippers = {}, {}
+        now = time.monotonic()
         for side in SIDES:
-            target = self.clutches[side].update(hands.get(side), poses[side])
+            hand = hands.get(side)
+            if hand is None:
+                if self.missing_since[side] is None:
+                    self.missing_since[side] = now
+                if now - self.missing_since[side] >= TRACKING_GRACE_S:
+                    self.clutches[side].release()
+                    self.side_release_required[side] = True
+                continue
+            if self.missing_since[side] is not None:
+                if now - self.missing_since[side] >= TRACKING_GRACE_S:
+                    self.clutches[side].release()
+                    self.side_release_required[side] = True
+                self.missing_since[side] = None
+            if self.side_release_required[side]:
+                if hand["squeeze"] < .5:
+                    self.side_release_required[side] = False
+                continue
+            target = self.clutches[side].update(hand, poses[side])
             if target is not None:
                 targets[side] = target
-                grippers[side] = 1. - hands[side]["trigger"]
+                grippers[side] = 1. - hand["trigger"]
         self.teleop_allowed = bool(targets)
-        self.hold_reason = "active" if targets else "grips_released"
+        self.hold_reason = ("active" if targets else
+                            "tracking_release_required" if any(self.side_release_required.values()) else
+                            "tracking_gap" if any(side not in hands for side in SIDES) else
+                            "grips_released")
         return targets, grippers
 
     def diagnostics(self):
@@ -158,5 +182,6 @@ class Controller:
             "teleop_paused": self.teleop_paused,
             "simulation_paused": False,
             "release_required": self.require_release,
+            "side_release_required": dict(self.side_release_required),
             "hold_reason": self.hold_reason,
         }

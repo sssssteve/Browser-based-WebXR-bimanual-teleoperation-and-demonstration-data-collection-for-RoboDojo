@@ -163,6 +163,8 @@ class Recorder:
             self.file.attrs["quality_reason"] = str(error)
         for name, value in report.get("timing", {}).items():
             self.file.attrs[f"timing_{name}"] = value
+        for name, value in report.get("controller_input", {}).items():
+            self.file.attrs[f"controller_input_{name}"] = value
         self.file.attrs["training_eligible"] = self.training_eligible and report.get("quality_pass", False)
         self.file.close()
         if report.get("quality_pass", False):
@@ -419,7 +421,7 @@ def _inspect_open_file(file, require_complete=True, max_wall_gap_s=.2):
     np.testing.assert_allclose(np.diff(file["timestamps/simulation"][:]), .04, atol=1e-6)
     assert np.all(np.diff(file["timestamps/render_dispatch"][:]) > 0), "Camera frame was repeated"
     input_valid = np.asarray(file["teleop/input_valid"][:], dtype=bool)
-    assert np.all(input_valid[action_valid]), "A recorded transition has stale or missing controller input"
+    missing_input_count = int(np.count_nonzero(~input_valid[action_valid]))
     for camera in CAMERAS:
         frames = file[f"vision/{camera}/colors"]
         assert len(frames) == count, f"Frame count mismatch for {camera}"
@@ -433,7 +435,11 @@ def _inspect_open_file(file, require_complete=True, max_wall_gap_s=.2):
     source = json.loads(raw_metadata.decode() if isinstance(raw_metadata, bytes) else raw_metadata)
     return {"frames": count, "cameras": list(CAMERAS),
             "success": bool(file.attrs["success"]), "alignment": "verified",
-            "quality_pass": True, "timing": timing, "source": source}
+            "quality_pass": True, "timing": timing,
+            "controller_input": {
+                "missing_transition_count": missing_input_count,
+                "valid_transition_count": int(np.count_nonzero(action_valid)),
+            }, "source": source}
 
 
 def inspect_episode(path):

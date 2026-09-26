@@ -7,8 +7,21 @@ const phaseElement = document.querySelector('#phase');
 const taskCountElement = document.querySelector('#task-count');
 const totalCountElement = document.querySelector('#total-count');
 const frameCountElement = document.querySelector('#frame-count');
-const lifecycleBar = document.querySelector('#lifecycle-bar');
-const lifecycleLabel = document.querySelector('#lifecycle-label');
+const qualityPanelElement = document.querySelector('#quality-panel');
+const qualityBadgeElement = document.querySelector('#quality-badge');
+const episodeProgressElement = document.querySelector('#episode-progress');
+const qualityHzElement = document.querySelector('#quality-hz');
+const qualityInputElement = document.querySelector('#quality-input');
+const qualityWriterElement = document.querySelector('#quality-writer');
+const qualityReasonsElement = document.querySelector('#quality-reasons');
+const successTextElement = document.querySelector('#success-text');
+const recentListElement = document.querySelector('#recent-list');
+const viewportElement = document.querySelector('#viewport');
+const fullscreenButtonElement = document.querySelector('#fullscreen-button');
+const fullscreenRecordingElement = document.querySelector('#fullscreen-recording');
+const fullscreenPhaseElement = document.querySelector('#fullscreen-phase');
+const fullscreenTaskCountElement = document.querySelector('#fullscreen-task-count');
+const fullscreenTotalCountElement = document.querySelector('#fullscreen-total-count');
 const menuElement = document.querySelector('#menu');
 const menuTitleElement = document.querySelector('#menu-title');
 const menuBodyElement = document.querySelector('#menu-body');
@@ -20,24 +33,60 @@ let frameNumber = 0, drawnFrame = 0, lastMessage = 0;
 let pendingFrame = null, decodeRunning = false;
 let envEpoch = null;
 
-function renderLifecycleProgress(msg) {
-  const lifecycle=msg.lifecycle || {}, operation=msg.operation || lifecycle.operation || {};
-  const raw=lifecycle.phase || operation.phase || msg.phase || 'starting';
-  const ready=(msg.phase === 'ready' || msg.phase === 'recording') && operation.status !== 'running';
-  const stages=[
-    [/shutdown|restart_requested/,15,'正在关闭旧场景'],
-    [/process_start|starting/,28,'正在启动新空间'],
-    [/initialize_env/,45,'正在创建仿真环境'],
-    [/initialize_reset|reset_seed|reset_physics/,62,'正在重置场景'],
-    [/initialize_episode/,74,'正在初始化任务'],
-    [/initialize_render|render_enter/,86,'正在初始化渲染'],
-    [/first_observation|capture/,95,'正在获取三相机首帧'],
-  ];
-  const stage=ready ? [null,100,'空间已就绪'] : stages.find(([pattern]) => pattern.test(raw)) || [null,8,'已接受任务切换'];
-  const target=operation.target_task || lifecycle.task || msg.task || '目标任务';
-  const elapsed=Number(lifecycle.phase_duration_ms ?? operation.duration_ms);
-  lifecycleBar.value=stage[1];
-  lifecycleLabel.textContent=`${target} · ${stage[2]} · ${stage[1]}%${Number.isFinite(elapsed) ? ` · 本阶段 ${(elapsed/1000).toFixed(1)} 秒` : ''}`;
+function syncFullscreenButton() {
+  fullscreenButtonElement.textContent=document.fullscreenElement ? '退出全屏' : '⛶ 全屏仿真视角';
+}
+
+fullscreenButtonElement.addEventListener('click', async () => {
+  if (document.fullscreenElement) await document.exitFullscreen();
+  else await viewportElement.requestFullscreen();
+});
+document.addEventListener('fullscreenchange', syncFullscreenButton);
+
+function renderQuality(msg, input, cycle, writer) {
+  const frames=Number(msg.frames || 0);
+  const wallHz=Number(msg.wall_hz || 0);
+  const previewAge=Number(msg.preview_transport?.age_ms ?? 0);
+  const isRecording=msg.phase === 'recording';
+  const reasons=[];
+  let level='ok';
+  const warn=text => { reasons.push(text); if (level === 'ok') level='warning'; };
+  const error=text => { reasons.push(text); level='error'; };
+
+  if (writer.writer_error) error('录制写入器异常，请停止并检查本条数据。');
+  if (isRecording && (!msg.input_fresh || input.timed_out)) error('控制输入已超时。');
+  if (writer.backpressure) warn(`写入队列出现背压 ${writer.queue_depth || 0}/${writer.queue_capacity || 0}。`);
+  if (isRecording && (input.seq_gaps || 0) > 0) warn(`本次连接累计发现 ${input.seq_gaps} 个输入序号间隙。`);
+  if (isRecording && (!input.left_tracking || !input.right_tracking)) warn('左右手柄未同时保持 tracking。');
+  if (isRecording && (msg.ik_failures || 0) > 0) warn(`累计 IK 失败 ${msg.ik_failures} 次。`);
+  if (isRecording && previewAge > 1000) warn(`监看画面已滞后 ${Math.round(previewAge)} ms。`);
+  if (isRecording && (cycle.p95 || 0) > 200) warn(`控制周期 P95 为 ${cycle.p95} ms。`);
+
+  qualityPanelElement.dataset.level=level;
+  qualityBadgeElement.textContent=isRecording ? {ok:'状态良好',warning:'需要关注',error:'异常'}[level] : '待录制';
+  episodeProgressElement.textContent=`${frames} 帧 · ${(frames / 25).toFixed(1)} 秒`;
+  qualityHzElement.textContent=`${wallHz || 0} Hz`;
+  qualityInputElement.textContent=msg.input_fresh ? `新鲜 · ${input.effective_age_ms ?? '-'} ms` : '未就绪';
+  qualityWriterElement.textContent=writer.writer_alive ? `正常 · ${writer.queue_depth || 0}/${writer.queue_capacity || 0}` : (isRecording ? '未运行' : '待录制');
+  qualityReasonsElement.replaceChildren(...reasons.map(text => {
+    const item=document.createElement('li'); item.textContent=text; return item;
+  }));
+}
+
+function renderRecent(episodes) {
+  const recent=(episodes || []).slice(0,5);
+  if (!recent.length) {
+    const item=document.createElement('li'); item.className='empty'; item.textContent='当前任务暂无已验收记录';
+    recentListElement.replaceChildren(item);
+    return;
+  }
+  recentListElement.replaceChildren(...recent.map(episode => {
+    const item=document.createElement('li'); item.className='recent-item';
+    const title=document.createElement('b'); title.textContent=episode.name.replace('.hdf5','');
+    const result=document.createElement('span'); result.className=episode.success ? 'recent-ok' : 'recent-fail';
+    result.textContent=`${episode.success ? '成功' : '未成功'} · ${episode.frames} 帧`;
+    item.append(title,result); return item;
+  }));
 }
 
 function renderVrMenu(ui) {
@@ -75,7 +124,6 @@ function connect() {
         pendingFrame=null; context.fillStyle='#080e15'; context.fillRect(0,0,1280,720);
       }
       envEpoch=msg.env_epoch;
-      renderLifecycleProgress(msg);
       statusReceivedAt=performance.now();
       const phase={starting:'启动中',ready:'已就绪',recording:'录制中'}[msg.phase] || msg.phase;
       const input=msg.input || {}, cycle=msg.cycle_ms || {}, writer=msg.recording_writer || {};
@@ -86,22 +134,32 @@ function connect() {
       taskCountElement.textContent=`${taskCount} 条`;
       totalCountElement.textContent=`${totalCount} 条`;
       frameCountElement.textContent=`${msg.frames || 0} 帧`;
+      fullscreenPhaseElement.textContent=`运行状态：${phase || '未知'}`;
+      fullscreenTaskCountElement.textContent=`当前任务已验收：${taskCount} 条`;
+      fullscreenTotalCountElement.textContent=`全部已验收：${totalCount} 条`;
       renderVrMenu(msg.vr_ui);
       if (writer.writer_error) {
         recordingElement.dataset.state='error';
         recordingElement.textContent='● 录制写入异常';
+        fullscreenRecordingElement.dataset.state='error';
+        fullscreenRecordingElement.textContent='● 录制写入异常';
       } else if (msg.phase === 'recording') {
         recordingElement.dataset.state='recording';
         recordingElement.textContent=`● 正在录制 · ${msg.frames || 0} 帧`;
+        fullscreenRecordingElement.dataset.state='recording';
+        fullscreenRecordingElement.textContent=`● 录制中 · ${msg.frames || 0} 帧`;
       } else {
         recordingElement.dataset.state='idle';
         recordingElement.textContent='○ 当前未录制';
+        fullscreenRecordingElement.dataset.state='idle';
+        fullscreenRecordingElement.textContent='○ 未录制';
       }
       const step=msg.step_profile || {}, obs=msg.observation_profile || {};
-      const motion=({waiting_for_recording:'等待录制，场景自动运动已冻结',recording_active:'录制中，场景自动运动已放行',not_gated:'普通静态任务'}[msg.task_motion] || '未知');
+      renderQuality(msg,input,cycle,writer);
+      successTextElement.textContent=msg.task_info?.success || '等待任务成功标准…';
+      renderRecent(msg.episodes);
       statusElement.textContent=`${msg.task || ''} · ${phase} · epoch ${msg.env_epoch ?? '-'} · tick ${msg.sim_tick ?? '-'} · ${msg.wall_hz || 0} Hz\n`+
         `录制 ${msg.phase === 'recording' ? '是' : '否'} · 当前 ${msg.frames || 0} 帧 · 当前任务已验收 ${taskCount} 条 · 全部任务已验收 ${totalCount} 条\n`+
-        `场景运动 ${motion}\n`+
         `输入 ${input.state || '未知'} · 收到/应用 ${input.received_seq ?? '-'}/${input.applied_seq ?? '-'} · 年龄 ${input.effective_age_ms ?? '-'} ms · tracking L/R ${input.left_tracking ? '有' : '无'}/${input.right_tracking ? '有' : '无'}\n`+
         `遥操 ${msg.teleop_allowed ? '允许' : '保持'} · 原因 ${msg.hold_reason || '-'} · IK ${JSON.stringify(msg.ik_status || {})}\n`+
         `周期 ms 当前/p50/p95/p99/max ${cycle.current ?? '-'}/${cycle.p50 ?? '-'}/${cycle.p95 ?? '-'}/${cycle.p99 ?? '-'}/${cycle.max ?? '-'}\n`+
@@ -118,8 +176,10 @@ function connect() {
     statusElement.textContent='画面连接已断开，正在重连…';
     recordingElement.dataset.state='error';
     recordingElement.textContent='● 监看连接已断开';
+    fullscreenRecordingElement.dataset.state='error';
+    fullscreenRecordingElement.textContent='● 监看连接已断开';
+    fullscreenPhaseElement.textContent='运行状态：连接断开';
     phaseElement.textContent='连接断开';
-    lifecycleLabel.textContent=`连接中断，保留最近进度 ${lifecycleBar.value}%`;
     renderVrMenu(null);
     if (!reconnectTimer) reconnectTimer=setTimeout(() => { reconnectTimer=null; connect(); },1500);
   };

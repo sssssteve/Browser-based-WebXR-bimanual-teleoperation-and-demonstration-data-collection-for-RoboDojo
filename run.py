@@ -299,7 +299,14 @@ def main():
     if missing_prompts:
         parser.error(f"Missing Chinese prompts for official tasks: {', '.join(missing_prompts)}")
     if args.task not in tasks:
-        parser.error(f"Task is not in the official ARX-X5 catalog: {args.task}")
+        if args.task_state_file is None or not tasks:
+            parser.error(f"Task is not supported by the dual-X5 VR collector: {args.task}")
+        fallback = "stack_blocks" if "stack_blocks" in tasks else tasks[0]
+        logging.warning("Task %s is not supported by the dual-X5 VR collector; using %s",
+                        args.task, fallback)
+        args.task = fallback
+        args.task_state_file.parent.mkdir(parents=True, exist_ok=True)
+        args.task_state_file.write_text(args.task + "\n")
     required_device = task_runtime_device(root, args.task)
     if str(args.device) != required_device:
         if args.device_state_file is None:
@@ -327,6 +334,11 @@ def main():
     bridge = Bridge(env_epoch, progress.path)
     catalog = task_catalog(root, tasks)
     bridge.catalog = catalog
+    bridge.status.update({
+        "phase": "starting", "task": args.task, "tasks": tasks,
+        "task_info": catalog[args.task], "message": "正在加载任务和三相机画面…",
+        "episode_counts": {}, "episodes": [],
+    })
     token = persistent_token(args.token_file)
     server = Server(bridge, args.host, args.port, token, cert, key, args.output,
                     args.allow_http_lan)
@@ -337,7 +349,7 @@ def main():
     log.info("Open %s://%s:%s/#token=%s", "https" if cert else "http", args.host, args.port, token)
     os.chdir(root)
     args.enable_cameras = True
-    args.kit_args = (args.kit_args or "") + " --enable isaacsim.sensors.camera --enable isaacsim.replicator.behavior"
+    args.kit_args = (args.kit_args or "") + " --enable isaacsim.sensors.camera --enable isaacsim.replicator.behavior --enable isaacsim.asset.gen.conveyor"
     # The dispatcher timestamp check in RoboDojo.observation rejects stale frames.
     # Global waitIdle serializes the whole RTX pipeline and roughly halves throughput.
     args.kit_args += " --/app/updateOrder/checkForHydraRenderComplete=1000"
@@ -719,7 +731,7 @@ def main():
             full_sim_waiting = args.task in FULL_SIM_GATED_TASKS and recorder is None
             task_motion_enabled = not task_motion_waiting
             if full_sim_waiting:
-                next_observation = observation
+                next_observation = backend.observation()
                 control_ms = (time.monotonic() - control_start) * 1000
             elif homing:
                 last_command, home_complete, home_error = backend.home_step(

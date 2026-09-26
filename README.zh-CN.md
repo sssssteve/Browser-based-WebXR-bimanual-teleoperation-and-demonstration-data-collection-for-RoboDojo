@@ -76,7 +76,7 @@ python -m pip install -r requirements.txt
 python export_official_hdf5.py data/episode_xxx.hdf5 data/episode_xxx_official.hdf5
 ```
 
-合格数据要求：三路相机可解码、状态和动作逐帧对齐、保留真实时间戳，并且 recorder 无 backpressure。超过 200 ms 的真实时间间隔会被记录供验收复核，但不会仅凭这一项自动拒绝操作员保存的轨迹。调试和合成数据只能放入 `validation/`，不得混入 `data/`。
+合格数据要求：三路相机可解码、状态和动作逐帧对齐、保留真实时间戳，并且 recorder 无 backpressure。超过 200 ms 的真实时间间隔以及缺失控制输入的 transition 会被记录供验收复核，但不会仅凭这些项目自动拒绝操作员保存的轨迹。调试和合成数据只能放入 `validation/`，不得混入 `data/`。
 
 运行时 token、日志、PID、TLS 材料、场景状态、外部资产和采集数据均不得提交到仓库。
 
@@ -88,6 +88,14 @@ python export_official_hdf5.py data/episode_xxx.hdf5 data/episode_xxx_official.h
 ## 更新记录
 
 每次修改代码、配置或文档，都必须在这里记录日期、具体改动、实际验证以及仍未验证的内容。
+
+### 2026-09-26 · 追踪与监看更新
+
+- 增加单手 150 ms 追踪宽限。单手丢失超过宽限后只释放对应机械臂，并要求该手松开侧握键后才能恢复；仍在追踪的另一侧可以继续操作。
+- 重做电脑监看页面，增加仿真画面全屏、录制与运行状态浮层、实时质量预警、任务成功标准和最近 5 条已验收轨迹。
+- 将缺失控制输入的 transition 写入 HDF5 元数据，不再仅凭这一项拒绝已保存轨迹；相关计数仍需在验收时复核。
+- 启用 Isaac 传送带扩展，并在传送带任务等待录制期间持续刷新预览 observation。
+- 验证：候选版本在 Piper 独立目录通过 42 个 CPU/协议测试，并通过 Python 编译、JavaScript 与 Shell 语法检查。本次未重启 Isaac Sim，也未执行头显端到端采集。
 
 ### 2026-09-26
 

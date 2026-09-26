@@ -7,17 +7,32 @@
 #summary{display:flex;gap:10px;padding:12px 190px 12px 18px;flex-wrap:wrap;background:#101b26}
 .metric{min-width:145px;padding:9px 13px;border-radius:8px;background:#1b3042}.metric b{display:block;color:#8fb4ca;font-size:13px}.metric span{font-size:20px;font-weight:700}
 .prompt{padding:10px 20px;background:#172635;border-left:6px solid #73e5b3;font-size:20px}
-#lifecycle-progress{padding:10px 12px;margin:0 0 14px;background:#132331;border-radius:8px;display:grid;grid-template-columns:auto minmax(120px,1fr);gap:8px 12px;align-items:center}
-#lifecycle-label{color:#a9dacc}#lifecycle-bar{width:100%;height:14px;accent-color:#73e5b3}
-#lifecycle-label{grid-column:1/-1;font-size:13px}
 #workspace{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,27vw);gap:12px;padding:12px}
 #viewport{position:relative;min-width:0;min-height:0;background:#080e15;border-radius:10px;overflow:hidden}
 #preview{width:100%;height:100%;object-fit:contain;background:#080e15}
+#fullscreen-button{position:absolute;z-index:4;top:12px;right:12px;padding:9px 13px;border:1px solid #58758a;border-radius:8px;background:#102131dd;color:#ecf3fa;font:600 14px system-ui;cursor:pointer;box-shadow:0 2px 12px #0008}
+#fullscreen-button:hover{background:#1b3b51}
+#fullscreen-hud{display:none;position:absolute;z-index:3;top:14px;left:14px;right:180px;align-items:center;gap:9px;flex-wrap:wrap;pointer-events:none}
+.fullscreen-chip{padding:8px 12px;border-radius:999px;background:#102131e8;border:1px solid #446176;color:#e7f0f7;font-size:15px;font-weight:700;box-shadow:0 2px 12px #0008}
+#fullscreen-recording[data-state="recording"]{background:#a92f2fee;border-color:#df5c5c;animation:pulse 1.2s infinite}
+#fullscreen-recording[data-state="error"]{background:#9a6700;border-color:#d9a52c}
+#viewport:fullscreen{width:100vw;height:100vh;border-radius:0;background:#050a0f}#viewport:fullscreen #fullscreen-hud{display:flex}#viewport:fullscreen #preview{width:100vw;height:100vh}
 #menu{position:absolute;inset:6% 12%;padding:24px 28px;background:#040c14ee;border:1px solid #41647c;border-radius:14px;box-shadow:0 8px 36px #000b;overflow:auto}
 #menu[hidden]{display:none}#menu h2{margin:0 0 14px;color:#73e5b3;font-size:28px}#menu-body{color:#d7e3ec;white-space:pre-wrap;margin-bottom:12px}
 #menu-items{list-style:none;margin:0;padding:0;display:grid;gap:8px}#menu-items li{padding:10px 14px;border-radius:7px;background:#ffffff0f;font-size:20px}#menu-items li.selected{background:#247d66;color:white}#menu-help{margin:14px 0 0;color:#aebdca;font-size:14px}
-#details{min-height:0;overflow:auto;border-radius:10px;background:#172635;padding:16px}#details h2{margin:0 0 12px;font-size:20px;color:#73e5b3}
-#status{margin:0;color:#a9dacc;white-space:pre-wrap;line-height:1.55;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
+#details{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.panel{border-radius:10px;background:#172635;padding:14px 16px}.panel h2{margin:0 0 11px;font-size:18px;color:#73e5b3}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.panel-head h2{margin:0}
+#quality-badge{padding:5px 10px;border-radius:999px;background:#247d66;color:white;font-size:14px;font-weight:700}
+#quality-panel[data-level="warning"] #quality-badge{background:#9a6700}#quality-panel[data-level="error"] #quality-badge{background:#a92f2f}
+.quality-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.quality-item{padding:9px 10px;border-radius:7px;background:#ffffff0a}
+.quality-item b{display:block;color:#8fb4ca;font-size:12px}.quality-item span{display:block;margin-top:3px;font-size:16px;font-weight:700}
+#quality-reasons{margin:10px 0 0;padding-left:20px;color:#c9d8e3;font-size:14px;line-height:1.45}#quality-reasons:empty{display:none}
+.note{margin:9px 0 0;color:#8299aa;font-size:12px}
+#success-text{margin:0;color:#e4edf4;line-height:1.55;font-size:15px}
+#recent-list{list-style:none;margin:0;padding:0;display:grid;gap:7px}.recent-item{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px 10px;border-radius:7px;background:#ffffff0a;font-size:13px}
+.recent-item b{font-size:14px}.recent-ok{color:#73e5b3}.recent-fail{color:#ffcb69}.empty{color:#8299aa;font-size:14px}
+#technical summary{cursor:pointer;color:#8fb4ca;font-weight:700}#status{margin:10px 0 0;color:#a9dacc;white-space:pre-wrap;line-height:1.55;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
 #recording{position:fixed;z-index:2;top:14px;right:20px;padding:10px 16px;border-radius:999px;background:#34495b;color:#fff;font-weight:700;box-shadow:0 2px 12px #0008}
 #recording[data-state="recording"]{background:#c62828;animation:pulse 1.2s infinite}#recording[data-state="error"]{background:#9a6700}
 @keyframes pulse{50%{box-shadow:0 0 0 8px #c6282844}}
@@ -34,9 +49,31 @@
   <div class="prompt" id="prompt">等待任务 Prompt…</div>
   <div id="workspace">
     <div id="viewport"><canvas id="preview" width="1280" height="720"></canvas>
+      <button id="fullscreen-button" type="button" aria-label="全屏显示仿真视角">⛶ 全屏仿真视角</button>
+      <div id="fullscreen-hud" aria-live="polite">
+        <span class="fullscreen-chip" id="fullscreen-recording" data-state="idle">○ 未录制</span>
+        <span class="fullscreen-chip" id="fullscreen-phase">运行状态：连接中</span>
+        <span class="fullscreen-chip" id="fullscreen-task-count">当前任务已验收：0 条</span>
+        <span class="fullscreen-chip" id="fullscreen-total-count">全部已验收：0 条</span>
+      </div>
       <section id="menu" hidden aria-live="polite"><h2 id="menu-title"></h2><div id="menu-body"></div><ol id="menu-items"></ol><p id="menu-help">摇杆上下选择 · 扳机确认 · B 返回 · 按下摇杆关闭菜单</p></section>
     </div>
-    <aside id="details"><h2>实时监测详情</h2><div id="lifecycle-progress"><b>空间重建进度</b><progress id="lifecycle-bar" max="100" value="0"></progress><span id="lifecycle-label">等待服务状态…</span></div><pre id="status">连接中…</pre></aside>
+    <aside id="details">
+      <section class="panel" id="quality-panel" data-level="ok">
+        <div class="panel-head"><h2>本轮质量</h2><span id="quality-badge">等待数据</span></div>
+        <div class="quality-grid">
+          <div class="quality-item"><b>轨迹</b><span id="episode-progress">0 帧 · 0.0 秒</span></div>
+          <div class="quality-item"><b>墙钟频率</b><span id="quality-hz">0 Hz</span></div>
+          <div class="quality-item"><b>控制输入</b><span id="quality-input">等待中</span></div>
+          <div class="quality-item"><b>数据写入</b><span id="quality-writer">等待中</span></div>
+        </div>
+        <ul id="quality-reasons"></ul>
+        <p class="note">实时预警仅用于现场判断，最终以保存时质量验收为准。</p>
+      </section>
+      <section class="panel"><h2>任务成功标准</h2><p id="success-text">等待任务信息…</p></section>
+      <section class="panel"><h2>最近 5 条已验收保存</h2><ol id="recent-list"><li class="empty">当前任务暂无记录</li></ol></section>
+      <details class="panel" id="technical"><summary>技术详情</summary><pre id="status">连接中…</pre></details>
+    </aside>
   </div>
 </div>
 <script type="module" src="/spectator.js"></script></html>
